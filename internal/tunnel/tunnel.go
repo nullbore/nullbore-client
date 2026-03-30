@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,6 +56,9 @@ func (c *Connector) connect() error {
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
+	}
+	if c.cfg.InsecureSkipVerify() {
+		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
 	conn, _, err := dialer.Dial(controlURL, header)
@@ -221,10 +225,13 @@ func (c *Connector) handleConnection(connID string) {
 	dataURL := fmt.Sprintf("%s/ws/data?id=%s", wsURL, url.QueryEscape(connID))
 
 	// Open data WebSocket to server
-	dialer := websocket.Dialer{
+	dataDialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
-	dataWS, _, err := dialer.Dial(dataURL, nil)
+	if c.cfg.InsecureSkipVerify() {
+		dataDialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	dataWS, _, err := dataDialer.Dial(dataURL, nil)
 	if err != nil {
 		log.Printf("data connect error: id=%s err=%v", connID, err)
 		return

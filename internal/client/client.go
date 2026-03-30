@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,10 +35,16 @@ type Tunnel struct {
 }
 
 func New(cfg *config.Config) *Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if cfg.InsecureSkipVerify() {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
 	return &Client{
 		cfg: cfg,
 		http: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout:   15 * time.Second,
+			Transport: transport,
 		},
 	}
 }

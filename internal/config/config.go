@@ -9,9 +9,10 @@ import (
 
 // Config holds client configuration.
 type Config struct {
-	Server     string `json:"server"`
-	APIKey     string `json:"api_key"`
-	DefaultTTL string `json:"default_ttl"`
+	Server        string `json:"server"`
+	APIKey        string `json:"api_key"`
+	DefaultTTL    string `json:"default_ttl"`
+	TLSSkipVerify bool   `json:"tls_skip_verify"`
 }
 
 // Load reads config from ~/.nullbore/config.toml (simple key=value parsing).
@@ -54,6 +55,8 @@ func Load() (*Config, error) {
 			cfg.APIKey = val
 		case "default_ttl":
 			cfg.DefaultTTL = val
+		case "tls_skip_verify":
+			cfg.TLSSkipVerify = val == "true" || val == "1" || val == "yes"
 		}
 	}
 
@@ -74,4 +77,12 @@ func (c *Config) Token() string {
 		return v
 	}
 	return c.APIKey
+}
+
+// InsecureSkipVerify returns whether to skip TLS verification, with env override.
+func (c *Config) InsecureSkipVerify() bool {
+	if v := os.Getenv("NULLBORE_TLS_SKIP_VERIFY"); v == "1" || v == "true" {
+		return true
+	}
+	return c.TLSSkipVerify
 }
