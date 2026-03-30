@@ -9,7 +9,6 @@ import (
 )
 
 func TestRunNoArgs(t *testing.T) {
-	// Should print usage, not error
 	err := Run([]string{})
 	if err != nil {
 		t.Errorf("Run([]) should not error: %v", err)
@@ -40,7 +39,6 @@ func TestRunUnknownCommand(t *testing.T) {
 }
 
 func TestRunOpenNoPort(t *testing.T) {
-	// open without --port should error
 	err := Run([]string{"open"})
 	if err == nil {
 		t.Error("Run([open]) without --port should error")
@@ -48,7 +46,6 @@ func TestRunOpenNoPort(t *testing.T) {
 }
 
 func TestRunStatus(t *testing.T) {
-	// Start a mock server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -134,5 +131,40 @@ func TestRunCloseNoArg(t *testing.T) {
 	err := Run([]string{"close"})
 	if err == nil {
 		t.Error("Run([close]) without arg should error")
+	}
+}
+
+func TestPortListParsing(t *testing.T) {
+	var pl portList
+
+	// Simple port
+	if err := pl.Set("3000"); err != nil {
+		t.Errorf("Set(3000) error: %v", err)
+	}
+	if len(pl) != 1 || pl[0].Port != 3000 || pl[0].Name != "" {
+		t.Errorf("Set(3000) = %+v, want port=3000 name=''", pl[0])
+	}
+
+	// Port with name
+	if err := pl.Set("8080:web"); err != nil {
+		t.Errorf("Set(8080:web) error: %v", err)
+	}
+	if len(pl) != 2 || pl[1].Port != 8080 || pl[1].Name != "web" {
+		t.Errorf("Set(8080:web) = %+v, want port=8080 name='web'", pl[1])
+	}
+
+	// Invalid port
+	if err := pl.Set("abc"); err == nil {
+		t.Error("Set(abc) should error")
+	}
+
+	// Port out of range
+	if err := pl.Set("99999"); err == nil {
+		t.Error("Set(99999) should error")
+	}
+
+	// Zero port
+	if err := pl.Set("0"); err == nil {
+		t.Error("Set(0) should error")
 	}
 }
