@@ -17,7 +17,8 @@ import (
 	"github.com/nullbore/nullbore-client/internal/tunnel"
 )
 
-const version = "0.1.0"
+// version is set at build time via -ldflags for releases.
+var version = "0.1.0-dev"
 
 func Run(args []string) error {
 	if len(args) == 0 {
