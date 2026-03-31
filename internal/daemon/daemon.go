@@ -20,6 +20,7 @@ type TunnelConfig struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	LocalPort int    `json:"local_port"`
+	LocalHost string `json:"local_host,omitempty"` // target host (for Docker/network use, default localhost)
 	Subdomain string `json:"subdomain"`
 	TTL       string `json:"ttl"`
 	IdleTTL   bool   `json:"idle_ttl"`
@@ -206,6 +207,7 @@ func (d *Daemon) reconcile(configs []TunnelConfig, tunnelServer, tunnelAPIKey st
 
 		spec := tunnel.TunnelSpec{
 			Port: c.LocalPort,
+			Host: c.LocalHost,
 			Name: c.Subdomain,
 			TTL:  c.TTL,
 		}

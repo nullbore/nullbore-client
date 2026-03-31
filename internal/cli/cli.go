@@ -296,6 +296,11 @@ func cmdStatus(cfg *config.Config) error {
 }
 
 func cmdDaemon(cfg *config.Config) error {
+	// Static tunnel mode: NULLBORE_TUNNELS=host:port:slug,host:port:slug,...
+	if tunnelEnv := os.Getenv("NULLBORE_TUNNELS"); tunnelEnv != "" {
+		return runStaticTunnels(cfg, tunnelEnv)
+	}
+
 	if cfg.Token() == "" {
 		return fmt.Errorf("API key required for daemon mode. Set api_key in config or NULLBORE_API_KEY env")
 	}
@@ -314,6 +319,99 @@ func cmdDaemon(cfg *config.Config) error {
 	}()
 
 	return d.Run()
+}
+
+// runStaticTunnels opens tunnels from NULLBORE_TUNNELS env var.
+// Format: host:port:slug,host:port:slug,...
+// Examples: gramps:5000:gramps-web,openclaw:8080:my-claw
+//           localhost:3000:api (equivalent to just port 3000)
+func runStaticTunnels(cfg *config.Config, spec string) error {
+	if cfg.Token() == "" {
+		return fmt.Errorf("API key required. Set NULLBORE_API_KEY")
+	}
+
+	apiClient := client.New(cfg)
+	mgr := tunnel.NewManager(cfg, apiClient)
+
+	entries := strings.Split(spec, ",")
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		parts := strings.SplitN(entry, ":", 3)
+		var host, slug string
+		var port int
+
+		switch len(parts) {
+		case 1:
+			// Just a port: "3000"
+			p, err := strconv.Atoi(parts[0])
+			if err != nil {
+				return fmt.Errorf("invalid tunnel spec %q: %w", entry, err)
+			}
+			port = p
+		case 2:
+			// port:slug or host:port
+			p, err := strconv.Atoi(parts[0])
+			if err != nil {
+				// host:port
+				host = parts[0]
+				p2, err := strconv.Atoi(parts[1])
+				if err != nil {
+					return fmt.Errorf("invalid tunnel spec %q: expected host:port", entry)
+				}
+				port = p2
+			} else {
+				// port:slug
+				port = p
+				slug = parts[1]
+			}
+		case 3:
+			// host:port:slug
+			host = parts[0]
+			p, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return fmt.Errorf("invalid tunnel spec %q: port must be a number", entry)
+			}
+			port = p
+			slug = parts[2]
+		default:
+			return fmt.Errorf("invalid tunnel spec %q", entry)
+		}
+
+		s := tunnel.TunnelSpec{
+			Port: port,
+			Host: host,
+			Name: slug,
+			TTL:  cfg.DefaultTTL,
+		}
+
+		at, err := mgr.OpenTunnel(s)
+		if err != nil {
+			return fmt.Errorf("opening tunnel %q: %w", entry, err)
+		}
+
+		target := "localhost"
+		if host != "" {
+			target = host
+		}
+		log.Printf("tunnel open: %s → %s:%d", at.PublicURL, target, port)
+	}
+
+	// Graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigCh
+		log.Printf("shutting down tunnels...")
+		mgr.Close()
+		os.Exit(0)
+	}()
+
+	return mgr.Run()
 }
 
 func cmdUpdate(args []string) error {

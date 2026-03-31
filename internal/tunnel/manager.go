@@ -13,6 +13,7 @@ import (
 // TunnelSpec defines a single tunnel to open.
 type TunnelSpec struct {
 	Port int
+	Host string // target host (default "", meaning localhost)
 	Name string
 	TTL  string
 }
@@ -51,7 +52,12 @@ func (m *Manager) OpenTunnel(spec TunnelSpec) (*ActiveTunnel, error) {
 		return nil, fmt.Errorf("creating tunnel for port %d: %w", spec.Port, err)
 	}
 
-	conn := NewConnector(m.cfg, t.ID, spec.Port)
+	var conn *Connector
+	if spec.Host != "" {
+		conn = NewConnectorWithHost(m.cfg, t.ID, spec.Host, spec.Port)
+	} else {
+		conn = NewConnector(m.cfg, t.ID, spec.Port)
+	}
 	if err := conn.Connect(); err != nil {
 		return nil, fmt.Errorf("connecting tunnel for port %d: %w", spec.Port, err)
 	}

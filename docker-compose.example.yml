@@ -1,0 +1,34 @@
+# Example: Expose internal Docker services via NullBore tunnels
+#
+# This creates a tunnel container that can reach other services
+# in the same Docker network and expose them to the internet.
+
+services:
+  # Your application (no ports exposed to host)
+  gramps:
+    image: grampsweb/grampsweb:latest
+    # Only accessible within the Docker network
+
+  # NullBore tunnel sidecar
+  nullbore:
+    image: nullbore/tunnel
+    environment:
+      NULLBORE_API_KEY: nbk_your_api_key_here
+
+      # --- Option 1: Static tunnels ---
+      # Format: host:port:slug,host:port:slug,...
+      NULLBORE_TUNNELS: gramps:5000:my-gramps
+
+      # --- Option 2: Dashboard-driven ---
+      # Manage tunnels from https://nullbore.com/dashboard
+      # NULLBORE_DASHBOARD: https://nullbore.com
+      # (remove NULLBORE_TUNNELS to use dashboard mode)
+
+    restart: unless-stopped
+
+  # Another service example
+  # wiki:
+  #   image: requarks/wiki:2
+  #
+  # To expose it, add to NULLBORE_TUNNELS:
+  #   NULLBORE_TUNNELS: gramps:5000:my-gramps,wiki:3000:my-wiki

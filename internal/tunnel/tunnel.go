@@ -23,6 +23,7 @@ type Connector struct {
 	cfg       *config.Config
 	tunnelID  string
 	localPort int
+	localHost string // target host (default "127.0.0.1", can be docker service name)
 	control   *websocket.Conn
 	mu        sync.Mutex
 	closed    bool
@@ -39,6 +40,20 @@ func NewConnector(cfg *config.Config, tunnelID string, localPort int) *Connector
 		cfg:       cfg,
 		tunnelID:  tunnelID,
 		localPort: localPort,
+		localHost: "127.0.0.1",
+	}
+}
+
+// NewConnectorWithHost creates a Connector targeting a specific host (for Docker/network use).
+func NewConnectorWithHost(cfg *config.Config, tunnelID string, localHost string, localPort int) *Connector {
+	if localHost == "" {
+		localHost = "127.0.0.1"
+	}
+	return &Connector{
+		cfg:       cfg,
+		tunnelID:  tunnelID,
+		localPort: localPort,
+		localHost: localHost,
 	}
 }
 
@@ -238,7 +253,7 @@ func (c *Connector) handleConnection(connID string) {
 	}
 
 	// Connect to local service
-	localAddr := fmt.Sprintf("127.0.0.1:%d", c.localPort)
+	localAddr := fmt.Sprintf("%s:%d", c.localHost, c.localPort)
 	localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
 	if err != nil {
 		log.Printf("local connect error: id=%s addr=%s err=%v", connID, localAddr, err)
