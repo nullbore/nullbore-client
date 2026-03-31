@@ -9,12 +9,14 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"text/tabwriter"
 
 	"github.com/nullbore/nullbore-client/internal/client"
 	"github.com/nullbore/nullbore-client/internal/config"
 	"github.com/nullbore/nullbore-client/internal/daemon"
 	"github.com/nullbore/nullbore-client/internal/tunnel"
+	"github.com/nullbore/nullbore-client/internal/update"
 )
 
 // version is set at build time via -ldflags for releases.
@@ -41,8 +43,11 @@ func Run(args []string) error {
 		return cmdStatus(cfg)
 	case "daemon":
 		return cmdDaemon(cfg)
+	case "update":
+		return cmdUpdate(args[1:])
 	case "version":
 		fmt.Printf("nullbore %s\n", version)
+		checkUpdateQuiet()
 		return nil
 	case "help", "--help", "-h":
 		return printUsage()
@@ -249,6 +254,73 @@ func cmdDaemon(cfg *config.Config) error {
 	return d.Run()
 }
 
+func cmdUpdate(args []string) error {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	checkOnly := fs.Bool("check", false, "Only check for updates, don't install")
+	fs.Parse(args)
+
+	fmt.Printf("nullbore %s\n", version)
+	fmt.Println("Checking for updates...")
+
+	rel, err := update.CheckLatest()
+	if err != nil {
+		return fmt.Errorf("update check failed: %w", err)
+	}
+
+	if !update.IsNewer(version, rel.TagName) {
+		fmt.Println("✓ You're on the latest version")
+		return nil
+	}
+
+	fmt.Printf("  New version available: %s\n", rel.TagName)
+
+	if *checkOnly {
+		fmt.Printf("  Download: %s\n", rel.HTMLURL)
+		return nil
+	}
+
+	downloadURL, err := update.FindAsset(rel)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("  Downloading %s...\n", update.AssetName())
+	tmpPath, err := update.Download(downloadURL)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+
+	fmt.Println("  Installing...")
+	if err := update.ReplaceBinary(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("install failed: %w", err)
+	}
+
+	fmt.Printf("  ✅ Updated to %s\n", rel.TagName)
+	return nil
+}
+
+// checkUpdateQuiet runs a non-blocking version check and prints a hint if outdated.
+func checkUpdateQuiet() {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rel, err := update.CheckLatest()
+		if err != nil {
+			return
+		}
+		if update.IsNewer(version, rel.TagName) {
+			fmt.Printf("  → Update available: %s (run 'nullbore update')\n", rel.TagName)
+		}
+	}()
+
+	// Wait up to 2 seconds for the check
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+	}
+}
+
 func printUsage() error {
 	fmt.Print(`nullbore — on-demand tunnel client
 
@@ -257,6 +329,8 @@ Usage:
   nullbore open -p <port>[:<name>] [-p <port>[:<name>] ...]
   nullbore open <port> [<port> ...]
   nullbore daemon                             # dashboard-driven persistent mode
+  nullbore update                             # check for updates and self-update
+  nullbore update --check                     # check only, don't install
   nullbore list
   nullbore close <tunnel-id-or-name>
   nullbore status
