@@ -13,6 +13,7 @@ import (
 
 	"github.com/nullbore/nullbore-client/internal/client"
 	"github.com/nullbore/nullbore-client/internal/config"
+	"github.com/nullbore/nullbore-client/internal/daemon"
 	"github.com/nullbore/nullbore-client/internal/tunnel"
 )
 
@@ -37,6 +38,8 @@ func Run(args []string) error {
 		return cmdClose(cfg, args[1:])
 	case "status":
 		return cmdStatus(cfg)
+	case "daemon":
+		return cmdDaemon(cfg)
 	case "version":
 		fmt.Printf("nullbore %s\n", version)
 		return nil
@@ -224,6 +227,27 @@ func cmdStatus(cfg *config.Config) error {
 	return nil
 }
 
+func cmdDaemon(cfg *config.Config) error {
+	if cfg.Token() == "" {
+		return fmt.Errorf("API key required for daemon mode. Set api_key in config or NULLBORE_API_KEY env")
+	}
+
+	d := daemon.New(cfg)
+
+	// Graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigCh
+		log.Printf("shutting down daemon...")
+		d.Stop()
+		os.Exit(0)
+	}()
+
+	return d.Run()
+}
+
 func printUsage() error {
 	fmt.Print(`nullbore — on-demand tunnel client
 
@@ -231,6 +255,7 @@ Usage:
   nullbore open --port <port> [--name <name>] [--ttl <duration>]
   nullbore open -p <port>[:<name>] [-p <port>[:<name>] ...]
   nullbore open <port> [<port> ...]
+  nullbore daemon                             # dashboard-driven persistent mode
   nullbore list
   nullbore close <tunnel-id-or-name>
   nullbore status
@@ -251,7 +276,13 @@ Configuration:
 Environment:
   NULLBORE_SERVER             Override server URL
   NULLBORE_API_KEY            Override API key
+  NULLBORE_DASHBOARD          Override dashboard URL
   NULLBORE_TLS_SKIP_VERIFY    Skip TLS verification (1/true)
+
+Daemon mode:
+  Connects to the NullBore dashboard and manages tunnels based on your
+  dashboard configuration. Tunnels activate/deactivate remotely without
+  restarting the daemon.
 `)
 	return nil
 }

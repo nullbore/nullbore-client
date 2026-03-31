@@ -10,6 +10,7 @@ import (
 // Config holds client configuration.
 type Config struct {
 	Server        string `json:"server"`
+	Dashboard     string `json:"dashboard"`
 	APIKey        string `json:"api_key"`
 	DefaultTTL    string `json:"default_ttl"`
 	TLSSkipVerify bool   `json:"tls_skip_verify"`
@@ -55,6 +56,8 @@ func Load() (*Config, error) {
 			cfg.APIKey = val
 		case "default_ttl":
 			cfg.DefaultTTL = val
+		case "dashboard":
+			cfg.Dashboard = val
 		case "tls_skip_verify":
 			cfg.TLSSkipVerify = val == "true" || val == "1" || val == "yes"
 		}
@@ -77,6 +80,17 @@ func (c *Config) Token() string {
 		return v
 	}
 	return c.APIKey
+}
+
+// DashboardURL returns the dashboard URL, with env override.
+func (c *Config) DashboardURL() string {
+	if v := os.Getenv("NULLBORE_DASHBOARD"); v != "" {
+		return v
+	}
+	if c.Dashboard != "" {
+		return c.Dashboard
+	}
+	return "https://nullbore.com"
 }
 
 // InsecureSkipVerify returns whether to skip TLS verification, with env override.
