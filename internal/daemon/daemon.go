@@ -129,6 +129,7 @@ func (d *Daemon) sync() error {
 	var result struct {
 		Configs      []TunnelConfig `json:"configs"`
 		TunnelServer string         `json:"tunnel_server"`
+		TunnelAPIKey string         `json:"tunnel_api_key"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
 
@@ -138,12 +139,18 @@ func (d *Daemon) sync() error {
 		tunnelServer = d.cfg.ServerURL()
 	}
 
-	d.reconcile(result.Configs, tunnelServer)
+	// Use tunnel-specific API key if dashboard provides one, otherwise fall back to daemon key
+	tunnelAPIKey := result.TunnelAPIKey
+	if tunnelAPIKey == "" {
+		tunnelAPIKey = d.cfg.Token()
+	}
+
+	d.reconcile(result.Configs, tunnelServer, tunnelAPIKey)
 	return nil
 }
 
 // reconcile converges running tunnels toward desired state.
-func (d *Daemon) reconcile(configs []TunnelConfig, tunnelServer string) {
+func (d *Daemon) reconcile(configs []TunnelConfig, tunnelServer, tunnelAPIKey string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -187,11 +194,13 @@ func (d *Daemon) reconcile(configs []TunnelConfig, tunnelServer string) {
 		log.Printf("[daemon] starting: %s (port %d → %s.tunnel.nullbore.com)",
 			c.Name, c.LocalPort, c.Subdomain)
 
-		// Create a config pointing at the tunnel server
+		// Create a config pointing at the tunnel server.
+		// ExplicitKey bypasses env var override so the tunnel server key
+		// is used instead of the dashboard API key.
 		tunnelCfg := &config.Config{
-			Server:     tunnelServer,
-			APIKey:     d.cfg.Token(),
-			DefaultTTL: c.TTL,
+			Server:      tunnelServer,
+			ExplicitKey: tunnelAPIKey,
+			DefaultTTL:  c.TTL,
 		}
 		apiClient := client.New(tunnelCfg)
 

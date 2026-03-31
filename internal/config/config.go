@@ -14,6 +14,10 @@ type Config struct {
 	APIKey        string `json:"api_key"`
 	DefaultTTL    string `json:"default_ttl"`
 	TLSSkipVerify bool   `json:"tls_skip_verify"`
+
+	// ExplicitKey, if set, takes precedence over APIKey and env vars.
+	// Used by the daemon to pass tunnel-server-specific API keys.
+	ExplicitKey string `json:"-"`
 }
 
 // Load reads config from ~/.nullbore/config.toml (simple key=value parsing).
@@ -74,8 +78,12 @@ func (c *Config) ServerURL() string {
 	return c.Server
 }
 
-// Token returns the API key, with env override.
+// Token returns the API key. ExplicitKey takes highest precedence,
+// then NULLBORE_API_KEY env var, then the config file value.
 func (c *Config) Token() string {
+	if c.ExplicitKey != "" {
+		return c.ExplicitKey
+	}
 	if v := os.Getenv("NULLBORE_API_KEY"); v != "" {
 		return v
 	}

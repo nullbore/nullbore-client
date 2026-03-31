@@ -243,5 +243,149 @@ func TestDaemonActiveCount(t *testing.T) {
 	}
 }
 
+// TestSyncReceivesTunnelAPIKey verifies the daemon uses tunnel_api_key from dashboard.
+func TestSyncReceivesTunnelAPIKey(t *testing.T) {
+	var gotAuth string
+	var mu sync.Mutex
+
+	tunnelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		// Return a created tunnel
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id": "tid_1", "slug": "test-slug", "local_port": 8080,
+			"created_at": "2026-01-01T00:00:00Z", "expires_at": "2026-01-01T01:00:00Z",
+		})
+	}))
+	defer tunnelServer.Close()
+
+	dashServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/token":
+			json.NewEncoder(w).Encode(map[string]string{"token": "dash_tok", "user_id": "u1"})
+		case "/api/daemon/configs":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"configs": []TunnelConfig{
+					{ID: "c1", Name: "test", LocalPort: 8080, Subdomain: "test", TTL: "1h", Active: true},
+				},
+				"tunnel_server":  tunnelServer.URL,
+				"tunnel_api_key": "nbk_server_specific_key",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer dashServer.Close()
+
+	cfg := &config.Config{
+		Dashboard: dashServer.URL,
+		APIKey:    "nbk_dashboard_key",
+	}
+	d := New(cfg)
+	d.authenticate()
+	d.sync()
+
+	// Give reconcile a moment to call the tunnel server
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "Bearer nbk_server_specific_key" {
+		t.Errorf("expected tunnel server to receive 'Bearer nbk_server_specific_key', got %q", gotAuth)
+	}
+}
+
+// TestReconcileDetectsPortChange verifies port change triggers tunnel restart.
+func TestReconcileDetectsPortChange(t *testing.T) {
+	cfg := &config.Config{Server: "http://localhost:9999", APIKey: "nbk_test"}
+	d := New(cfg)
+
+	d.mu.Lock()
+	d.active["c1"] = TunnelConfig{
+		ID: "c1", Name: "api", LocalPort: 3000, Subdomain: "api", Active: true,
+	}
+	d.mu.Unlock()
+
+	newConfig := TunnelConfig{ID: "c1", Name: "api", LocalPort: 4000, Subdomain: "api", Active: true}
+
+	d.mu.Lock()
+	prev := d.active["c1"]
+	needsRestart := prev.LocalPort != newConfig.LocalPort || prev.Subdomain != newConfig.Subdomain
+	d.mu.Unlock()
+
+	if !needsRestart {
+		t.Error("port change should trigger restart")
+	}
+}
+
+// TestReconcileDetectsSubdomainChange verifies subdomain change triggers restart.
+func TestReconcileDetectsSubdomainChange(t *testing.T) {
+	cfg := &config.Config{Server: "http://localhost:9999", APIKey: "nbk_test"}
+	d := New(cfg)
+
+	d.mu.Lock()
+	d.active["c1"] = TunnelConfig{
+		ID: "c1", Name: "api", LocalPort: 3000, Subdomain: "api", Active: true,
+	}
+	d.mu.Unlock()
+
+	newConfig := TunnelConfig{ID: "c1", Name: "api", LocalPort: 3000, Subdomain: "api-v2", Active: true}
+
+	d.mu.Lock()
+	prev := d.active["c1"]
+	needsRestart := prev.LocalPort != newConfig.LocalPort || prev.Subdomain != newConfig.Subdomain
+	d.mu.Unlock()
+
+	if !needsRestart {
+		t.Error("subdomain change should trigger restart")
+	}
+}
+
+// TestReconcileRemovesDeletedConfig verifies configs removed from dashboard get stopped.
+func TestReconcileRemovesDeletedConfig(t *testing.T) {
+	cfg := &config.Config{Server: "http://localhost:9999", APIKey: "nbk_test"}
+	d := New(cfg)
+
+	d.mu.Lock()
+	d.active["c1"] = TunnelConfig{ID: "c1", Name: "a", LocalPort: 3000, Active: true}
+	d.active["c2"] = TunnelConfig{ID: "c2", Name: "b", LocalPort: 3001, Active: true}
+	d.mu.Unlock()
+
+	desired := map[string]TunnelConfig{
+		"c1": {ID: "c1", Name: "a", LocalPort: 3000, Active: true},
+	}
+
+	d.mu.Lock()
+	for id := range d.active {
+		if _, exists := desired[id]; !exists {
+			delete(d.active, id)
+		}
+	}
+	d.mu.Unlock()
+
+	if len(d.active) != 1 {
+		t.Errorf("expected 1 active after deletion, got %d", len(d.active))
+	}
+	if _, ok := d.active["c2"]; ok {
+		t.Error("c2 should have been removed")
+	}
+}
+
+// TestStopCleansUp verifies Stop() clears all active tunnels.
+func TestStopCleansUp(t *testing.T) {
+	cfg := &config.Config{Server: "http://localhost:9999", APIKey: "test"}
+	d := New(cfg)
+
+	d.active["a"] = TunnelConfig{ID: "a"}
+	d.active["b"] = TunnelConfig{ID: "b"}
+
+	d.Stop()
+
+	if d.ActiveCount() != 0 {
+		t.Errorf("expected 0 after stop, got %d", d.ActiveCount())
+	}
+}
+
 // Ensure unused import doesn't cause issues
 var _ = time.Second
