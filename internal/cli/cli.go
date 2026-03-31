@@ -39,6 +39,8 @@ func Run(args []string) error {
 		return cmdList(cfg)
 	case "close":
 		return cmdClose(cfg, args[1:])
+	case "requests":
+		return cmdRequests(cfg, args[1:])
 	case "status":
 		return cmdStatus(cfg)
 	case "daemon":
@@ -213,6 +215,66 @@ func cmdClose(cfg *config.Config, args []string) error {
 	return nil
 }
 
+func cmdRequests(cfg *config.Config, args []string) error {
+	fs := flag.NewFlagSet("requests", flag.ExitOnError)
+	limit := fs.Int("limit", 20, "Number of requests to show")
+	fs.Parse(args)
+
+	if fs.NArg() == 0 {
+		return fmt.Errorf("usage: nullbore requests <tunnel-id-or-slug>\n\nShow recent requests for a tunnel. Get tunnel IDs from 'nullbore list'.")
+	}
+
+	target := fs.Arg(0)
+	c := client.New(cfg)
+
+	// Try to find tunnel by slug if it doesn't look like a UUID
+	tunnelID := target
+	if !strings.Contains(target, "-") || len(target) < 20 {
+		// Probably a slug — find the ID
+		tunnels, err := c.ListTunnels()
+		if err != nil {
+			return fmt.Errorf("listing tunnels: %w", err)
+		}
+		found := false
+		for _, t := range tunnels {
+			if t.Slug == target || t.Name == target {
+				tunnelID = t.ID
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("tunnel %q not found", target)
+		}
+	}
+
+	logs, err := c.ListRequests(tunnelID, *limit)
+	if err != nil {
+		return fmt.Errorf("fetching requests: %w", err)
+	}
+
+	if len(logs) == 0 {
+		fmt.Println("no requests recorded yet")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TIME\tMETHOD\tPATH\tBODY\tFROM")
+	for _, r := range logs {
+		ts := r.CreatedAt
+		if len(ts) > 19 {
+			ts = ts[:19]
+		}
+		bodyInfo := fmt.Sprintf("%d B", r.BodySize)
+		if r.BodySize > 1024 {
+			bodyInfo = fmt.Sprintf("%.1f KB", float64(r.BodySize)/1024)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", ts, r.Method, r.Path, bodyInfo, r.RemoteIP)
+	}
+	w.Flush()
+	return nil
+}
+
 func cmdStatus(cfg *config.Config) error {
 	c := client.New(cfg)
 	health, err := c.Health()
@@ -332,6 +394,7 @@ Usage:
   nullbore update                             # check for updates and self-update
   nullbore update --check                     # check only, don't install
   nullbore list
+  nullbore requests <tunnel-or-slug>          # inspect incoming HTTP requests
   nullbore close <tunnel-id-or-name>
   nullbore status
   nullbore version

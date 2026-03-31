@@ -82,6 +82,30 @@ func (c *Client) CloseTunnel(id string) error {
 	return c.del("/v1/tunnels/" + id)
 }
 
+// RequestLog represents a logged request from the server.
+type RequestLog struct {
+	ID        string `json:"id"`
+	TunnelID  string `json:"tunnel_id"`
+	Slug      string `json:"slug"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	Headers   string `json:"headers"`
+	BodySize  int64  `json:"body_size"`
+	BodySnip  string `json:"body_snippet,omitempty"`
+	RemoteIP  string `json:"remote_ip"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ListRequests returns recent request logs for a tunnel.
+func (c *Client) ListRequests(tunnelID string, limit int) ([]RequestLog, error) {
+	path := fmt.Sprintf("/v1/tunnels/%s/requests?limit=%d", tunnelID, limit)
+	var logs []RequestLog
+	if err := c.get(path, &logs); err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
 // Health checks the server status.
 func (c *Client) Health() (map[string]string, error) {
 	var result map[string]string
