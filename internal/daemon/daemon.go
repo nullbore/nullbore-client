@@ -1,12 +1,7 @@
 package daemon
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,219 +10,166 @@ import (
 	"github.com/nullbore/nullbore-client/internal/tunnel"
 )
 
-// TunnelConfig mirrors the dashboard's tunnel config.
-type TunnelConfig struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	LocalPort int    `json:"local_port"`
-	LocalHost string `json:"local_host,omitempty"` // target host (for Docker/network use, default localhost)
-	Subdomain string `json:"subdomain"`
-	TTL       string `json:"ttl"`
-	IdleTTL   bool   `json:"idle_ttl"`
-	Active    bool   `json:"active"`
-	TunnelID  string `json:"tunnel_id,omitempty"`
-}
-
-// Daemon manages tunnel connections based on dashboard configs.
+// Daemon manages persistent tunnel connections from config.toml.
+// The config file is the single source of truth for what tunnels should run.
+// One-off `nullbore open` tunnels coexist independently on the same device.
 type Daemon struct {
-	cfg       *config.Config
-	dashToken string
-	httpClient *http.Client
+	cfg    *config.Config
+	client *client.Client
 
 	mu       sync.Mutex
-	managers map[string]*tunnel.Manager // config ID → running manager
-	active   map[string]TunnelConfig    // config ID → config
-	stopChs  map[string]chan struct{}    // config ID → stop signal
+	managers map[string]*tunnel.Manager // "port:name" → running manager
+	specs    map[string]config.TunnelSpec
 }
 
 // New creates a new daemon.
 func New(cfg *config.Config) *Daemon {
 	return &Daemon{
-		cfg:        cfg,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
-		managers:   make(map[string]*tunnel.Manager),
-		active:     make(map[string]TunnelConfig),
-		stopChs:    make(map[string]chan struct{}),
+		cfg:      cfg,
+		client:   client.New(cfg),
+		managers: make(map[string]*tunnel.Manager),
+		specs:    make(map[string]config.TunnelSpec),
 	}
 }
 
-// Run authenticates and starts the config sync loop.
+// specKey returns a stable identifier for a tunnel spec.
+func specKey(s config.TunnelSpec) string {
+	name := s.Name
+	if name == "" {
+		name = s.Subdomain
+	}
+	return name + ":" + string(rune(s.Port+'0'))
+}
+
+// Run starts the daemon: opens tunnels from config and watches for changes.
 func (d *Daemon) Run() error {
 	log.Printf("nullbore daemon starting")
-	log.Printf("dashboard: %s", d.cfg.DashboardURL())
+	log.Printf("server: %s", d.cfg.ServerURL())
 
-	if err := d.authenticate(); err != nil {
-		return fmt.Errorf("authentication failed: %w", err)
-	}
-	log.Printf("authenticated with dashboard")
-
-	// Initial sync
-	if err := d.sync(); err != nil {
-		return fmt.Errorf("initial sync failed: %w", err)
+	if len(d.cfg.Tunnels) == 0 {
+		log.Printf("no tunnels defined in config — daemon will idle")
+		log.Printf("add [[tunnels]] blocks to ~/.nullbore/config.toml")
+		// Keep running so one-off `nullbore open` tunnels still work on same key
+		select {}
 	}
 
-	// Poll for changes every 5s
-	ticker := time.NewTicker(5 * time.Second)
+	log.Printf("config: %d tunnel(s) defined", len(d.cfg.Tunnels))
+
+	// Initial sync from config
+	d.reconcile(d.cfg.Tunnels)
+
+	// Watch config for changes every 10s
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if err := d.sync(); err != nil {
-			log.Printf("sync error: %v (will retry)", err)
-			// Re-auth on persistent failures
-			if strings.Contains(err.Error(), "401") {
-				d.authenticate()
-			}
-		}
-	}
-	return nil
-}
-
-// authenticate exchanges API key for a dashboard session token.
-func (d *Daemon) authenticate() error {
-	body := fmt.Sprintf(`{"api_key":"%s"}`, d.cfg.Token())
-	resp, err := d.httpClient.Post(
-		d.cfg.DashboardURL()+"/api/auth/token",
-		"application/json",
-		strings.NewReader(body),
-	)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result struct {
-		Token  string `json:"token"`
-		UserID string `json:"user_id"`
-	}
-	json.NewDecoder(resp.Body).Decode(&result)
-	d.dashToken = result.Token
-	return nil
-}
-
-// sync fetches configs from dashboard and reconciles.
-func (d *Daemon) sync() error {
-	req, _ := http.NewRequest("GET", d.cfg.DashboardURL()+"/api/daemon/configs", nil)
-	req.Header.Set("Authorization", "Bearer "+d.dashToken)
-
-	resp, err := d.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 401 {
-		return fmt.Errorf("401 unauthorized")
-	}
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Configs      []TunnelConfig `json:"configs"`
-		TunnelServer string         `json:"tunnel_server"`
-		TunnelAPIKey string         `json:"tunnel_api_key"`
-	}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	// Override server URL if dashboard provides one
-	tunnelServer := result.TunnelServer
-	if tunnelServer == "" {
-		tunnelServer = d.cfg.ServerURL()
-	}
-
-	// Use tunnel-specific API key if dashboard provides one, otherwise fall back to daemon key
-	tunnelAPIKey := result.TunnelAPIKey
-	if tunnelAPIKey == "" {
-		tunnelAPIKey = d.cfg.Token()
-	}
-
-	d.reconcile(result.Configs, tunnelServer, tunnelAPIKey)
-	return nil
-}
-
-// reconcile converges running tunnels toward desired state.
-func (d *Daemon) reconcile(configs []TunnelConfig, tunnelServer, tunnelAPIKey string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	desired := make(map[string]TunnelConfig)
-	for _, c := range configs {
-		desired[c.ID] = c
-	}
-
-	// Stop tunnels that should no longer be active
-	for id, prev := range d.active {
-		curr, exists := desired[id]
-		if !exists || !curr.Active {
-			log.Printf("[daemon] stopping: %s (port %d)", prev.Name, prev.LocalPort)
-			if mgr, ok := d.managers[id]; ok {
-				mgr.Close()
-				delete(d.managers, id)
-			}
-			delete(d.active, id)
-		}
-	}
-
-	// Start tunnels that should be active
-	for id, c := range desired {
-		if !c.Active {
+		newCfg, err := config.Load()
+		if err != nil {
+			log.Printf("config reload error: %v (will retry)", err)
 			continue
 		}
 
-		prev, running := d.active[id]
-		if running && prev.LocalPort == c.LocalPort && prev.Subdomain == c.Subdomain {
-			continue // already running, no change
+		// Check if tunnel specs changed
+		if tunnelsChanged(d.cfg.Tunnels, newCfg.Tunnels) {
+			log.Printf("config changed: reconciling tunnels")
+			d.cfg.Tunnels = newCfg.Tunnels
+			d.reconcile(newCfg.Tunnels)
+		}
+	}
+	return nil
+}
+
+// tunnelsChanged compares two tunnel spec lists.
+func tunnelsChanged(old, new []config.TunnelSpec) bool {
+	if len(old) != len(new) {
+		return true
+	}
+	for i := range old {
+		if old[i].Port != new[i].Port || old[i].Name != new[i].Name ||
+			old[i].Subdomain != new[i].Subdomain || old[i].TTL != new[i].TTL ||
+			old[i].Host != new[i].Host || old[i].IdleTTL != new[i].IdleTTL {
+			return true
+		}
+	}
+	return false
+}
+
+// reconcile converges running tunnels toward the desired config state.
+func (d *Daemon) reconcile(specs []config.TunnelSpec) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	desired := make(map[string]config.TunnelSpec)
+	for _, s := range specs {
+		key := specKey(s)
+		desired[key] = s
+	}
+
+	// Stop tunnels no longer in config
+	for key, mgr := range d.managers {
+		if _, ok := desired[key]; !ok {
+			prev := d.specs[key]
+			log.Printf("[daemon] stopping: %s (port %d) — removed from config", prev.Name, prev.Port)
+			mgr.Close()
+			delete(d.managers, key)
+			delete(d.specs, key)
+		}
+	}
+
+	// Start or update tunnels
+	for key, s := range desired {
+		prev, running := d.specs[key]
+		if running && prev.Port == s.Port && prev.Subdomain == s.Subdomain &&
+			prev.Host == s.Host && prev.TTL == s.TTL {
+			continue // no change
 		}
 
 		// Config changed — stop old if running
 		if running {
-			if mgr, ok := d.managers[id]; ok {
+			if mgr, ok := d.managers[key]; ok {
+				log.Printf("[daemon] restarting: %s (config changed)", s.Name)
 				mgr.Close()
-				delete(d.managers, id)
+				delete(d.managers, key)
 			}
 		}
 
-		log.Printf("[daemon] starting: %s (port %d → %s.tunnel.nullbore.com)",
-			c.Name, c.LocalPort, c.Subdomain)
-
-		// Create a config pointing at the tunnel server.
-		// ExplicitKey bypasses env var override so the tunnel server key
-		// is used instead of the dashboard API key.
-		tunnelCfg := &config.Config{
-			Server:      tunnelServer,
-			ExplicitKey: tunnelAPIKey,
-			DefaultTTL:  c.TTL,
+		name := s.Name
+		if name == "" {
+			name = s.Subdomain
 		}
-		apiClient := client.New(tunnelCfg)
+		if name == "" {
+			name = "unnamed"
+		}
+
+		ttl := s.TTL
+		if ttl == "" {
+			ttl = d.cfg.DefaultTTL
+		}
+
+		log.Printf("[daemon] opening: %s (port %d)", name, s.Port)
+
+		mgr := tunnel.NewManager(d.cfg, d.client)
 
 		spec := tunnel.TunnelSpec{
-			Port: c.LocalPort,
-			Host: c.LocalHost,
-			Name: c.Subdomain,
-			TTL:  c.TTL,
+			Port: s.Port,
+			Host: s.Host,
+			Name: s.Subdomain,
+			TTL:  ttl,
 		}
 
-		mgr := tunnel.NewManager(tunnelCfg, apiClient)
-
-		// Open the tunnel
 		at, err := mgr.OpenTunnel(spec)
 		if err != nil {
-			log.Printf("[daemon] failed to open %s: %v", c.Name, err)
+			log.Printf("[daemon] failed to open %s: %v (will retry on next cycle)", name, err)
 			continue
 		}
 
-		log.Printf("[daemon] ✓ %s → %s", c.Name, at.PublicURL)
+		log.Printf("[daemon] ✓ %s → %s", name, at.PublicURL)
 
 		// Start reconnect loop in background
 		go mgr.Run()
 
-		d.managers[id] = mgr
-		d.active[id] = c
+		d.managers[key] = mgr
+		d.specs[key] = s
 	}
 }
 
@@ -235,16 +177,16 @@ func (d *Daemon) reconcile(configs []TunnelConfig, tunnelServer, tunnelAPIKey st
 func (d *Daemon) Stop() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for id, mgr := range d.managers {
+	for key, mgr := range d.managers {
 		mgr.Close()
-		delete(d.managers, id)
+		delete(d.managers, key)
 	}
-	d.active = make(map[string]TunnelConfig)
+	d.specs = make(map[string]config.TunnelSpec)
 }
 
 // ActiveCount returns the number of running tunnels.
 func (d *Daemon) ActiveCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return len(d.active)
+	return len(d.managers)
 }

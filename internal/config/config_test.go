@@ -165,3 +165,86 @@ bad_line_no_equals
 		t.Errorf("APIKey = %q, want %q", cfg.APIKey, "nbk_test")
 	}
 }
+
+func TestTunnelConfigParsing(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".nullbore", "config.toml")
+	os.MkdirAll(filepath.Dir(cfgPath), 0755)
+	os.WriteFile(cfgPath, []byte(`
+server = "https://tunnel.nullbore.com"
+api_key = "nbk_test123"
+
+[[tunnels]]
+port = 3000
+name = "my-api"
+ttl = "2h"
+
+[[tunnels]]
+port = 5432
+name = "postgres"
+subdomain = "db"
+idle_ttl = true
+
+[[tunnels]]
+port = 8080
+`), 0600)
+
+	// Override home dir
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if cfg.Server != "https://tunnel.nullbore.com" {
+		t.Errorf("server = %q", cfg.Server)
+	}
+	if cfg.APIKey != "nbk_test123" {
+		t.Errorf("api_key = %q", cfg.APIKey)
+	}
+
+	if len(cfg.Tunnels) != 3 {
+		t.Fatalf("tunnels = %d, want 3", len(cfg.Tunnels))
+	}
+
+	// First tunnel
+	if cfg.Tunnels[0].Port != 3000 || cfg.Tunnels[0].Name != "my-api" || cfg.Tunnels[0].TTL != "2h" {
+		t.Errorf("tunnel[0] = %+v", cfg.Tunnels[0])
+	}
+
+	// Second tunnel
+	if cfg.Tunnels[1].Port != 5432 || cfg.Tunnels[1].Name != "postgres" || cfg.Tunnels[1].Subdomain != "db" || !cfg.Tunnels[1].IdleTTL {
+		t.Errorf("tunnel[1] = %+v", cfg.Tunnels[1])
+	}
+
+	// Third tunnel (minimal — just port)
+	if cfg.Tunnels[2].Port != 8080 {
+		t.Errorf("tunnel[2] = %+v", cfg.Tunnels[2])
+	}
+}
+
+func TestNoTunnels(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".nullbore", "config.toml")
+	os.MkdirAll(filepath.Dir(cfgPath), 0755)
+	os.WriteFile(cfgPath, []byte(`
+server = "https://tunnel.nullbore.com"
+api_key = "nbk_test"
+`), 0600)
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if len(cfg.Tunnels) != 0 {
+		t.Errorf("tunnels = %d, want 0", len(cfg.Tunnels))
+	}
+}

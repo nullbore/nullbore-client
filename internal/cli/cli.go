@@ -584,7 +584,9 @@ Usage:
   nullbore open --port <port> [--name <name>] [--ttl <duration>]
   nullbore open -p <port>[:<name>] [-p <port>[:<name>] ...]
   nullbore open <port> [<port> ...]
-  nullbore daemon                             # dashboard-driven persistent mode
+  nullbore daemon                             # persistent mode from config.toml
+  nullbore device                             # show device info
+  nullbore device takeover                    # rebind API key to this device
   nullbore update                             # check for updates and self-update
   nullbore update --check                     # check only, don't install
   nullbore list
@@ -612,9 +614,20 @@ Environment:
   NULLBORE_TLS_SKIP_VERIFY    Skip TLS verification (1/true)
 
 Daemon mode:
-  Connects to the NullBore dashboard and manages tunnels based on your
-  dashboard configuration. Tunnels activate/deactivate remotely without
-  restarting the daemon.
+  Reads tunnel definitions from ~/.nullbore/config.toml and keeps them
+  open persistently. Watches config for changes (hot-reload every 10s).
+  One-off 'nullbore open' commands coexist on the same device.
+
+  Config example:
+    [[tunnels]]
+    port = 3000
+    name = "my-api"
+    ttl = "2h"
+
+    [[tunnels]]
+    port = 5432
+    name = "postgres"
+    subdomain = "db"
 `)
 	return nil
 }

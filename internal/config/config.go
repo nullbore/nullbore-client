@@ -6,8 +6,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
+
+// isTopLevelKey returns true if the key is a known top-level config key.
+func isTopLevelKey(key string) bool {
+	switch key {
+	case "server", "api_key", "default_ttl", "dashboard", "tls_skip_verify", "device_id":
+		return true
+	}
+	return false
+}
+
+// TunnelSpec defines a persistent tunnel in the config file.
+type TunnelSpec struct {
+	Port      int    `json:"port"`
+	Name      string `json:"name,omitempty"`
+	Subdomain string `json:"subdomain,omitempty"`
+	Host      string `json:"host,omitempty"` // local target host (default: localhost)
+	TTL       string `json:"ttl,omitempty"`
+	IdleTTL   bool   `json:"idle_ttl,omitempty"`
+}
 
 // Config holds client configuration.
 type Config struct {
@@ -17,6 +37,9 @@ type Config struct {
 	DefaultTTL    string `json:"default_ttl"`
 	TLSSkipVerify bool   `json:"tls_skip_verify"`
 	DeviceID      string `json:"device_id"`
+
+	// Tunnels defines persistent tunnels managed by the daemon.
+	Tunnels []TunnelSpec `json:"tunnels,omitempty"`
 
 	// ExplicitKey, if set, takes precedence over APIKey and env vars.
 	// Used by the daemon to pass tunnel-server-specific API keys.
@@ -47,17 +70,60 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
 
+	// Parse TOML-ish config: key=value at top level, [[tunnels]] for tunnel blocks
+	var currentTunnel *TunnelSpec
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+
+		// Handle [[tunnels]] section header
+		if line == "[[tunnels]]" {
+			// Save previous tunnel if any
+			if currentTunnel != nil && currentTunnel.Port > 0 {
+				cfg.Tunnels = append(cfg.Tunnels, *currentTunnel)
+			}
+			currentTunnel = &TunnelSpec{}
+			continue
+		}
+
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
 		val := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+
+		// If we're inside a [[tunnels]] block, parse tunnel keys
+		if currentTunnel != nil {
+			parsed := true
+			switch key {
+			case "port":
+				p, _ := strconv.Atoi(val)
+				currentTunnel.Port = p
+			case "name":
+				currentTunnel.Name = val
+			case "subdomain":
+				currentTunnel.Subdomain = val
+			case "host":
+				currentTunnel.Host = val
+			case "ttl":
+				currentTunnel.TTL = val
+			case "idle_ttl":
+				currentTunnel.IdleTTL = val == "true" || val == "1"
+			default:
+				parsed = false
+			}
+			if parsed {
+				continue
+			}
+			// Not a tunnel key — exit the block and fall through to top-level
+			if currentTunnel.Port > 0 {
+				cfg.Tunnels = append(cfg.Tunnels, *currentTunnel)
+			}
+			currentTunnel = nil
+		}
 
 		switch key {
 		case "server":
@@ -73,6 +139,11 @@ func Load() (*Config, error) {
 		case "device_id":
 			cfg.DeviceID = val
 		}
+	}
+
+	// Save last tunnel block if any
+	if currentTunnel != nil && currentTunnel.Port > 0 {
+		cfg.Tunnels = append(cfg.Tunnels, *currentTunnel)
 	}
 
 	cfg.configPath = path
