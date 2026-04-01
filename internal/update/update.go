@@ -183,7 +183,7 @@ func ReplaceBinary(newPath string) error {
 		return fmt.Errorf("backing up current binary: %w", err)
 	}
 
-	if err := os.Rename(newPath, currentBin); err != nil {
+	if err := moveFile(newPath, currentBin); err != nil {
 		// Try to restore backup
 		os.Rename(backupPath, currentBin)
 		return fmt.Errorf("installing new binary: %w", err)
@@ -200,6 +200,35 @@ func normalizeVersion(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	v = strings.TrimPrefix(v, "nullbore ")
 	return v
+}
+
+// moveFile moves src to dst, falling back to copy+remove if rename fails
+// (e.g. cross-device link when /tmp is a different filesystem).
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+
+	// Fall back to copy
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	out.Close()
+	os.Remove(src)
+	return nil
 }
 
 func resolveLinks(path string) (string, error) {
