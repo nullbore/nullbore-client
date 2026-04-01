@@ -32,6 +32,7 @@ type Tunnel struct {
 	BytesIn   int64  `json:"bytes_in"`
 	BytesOut  int64  `json:"bytes_out"`
 	Requests  int64  `json:"requests"`
+	PublicURL string `json:"public_url,omitempty"`
 }
 
 func New(cfg *config.Config) *Client {

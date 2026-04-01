@@ -72,7 +72,10 @@ func RunWithFullReconnect(
 			continue
 		}
 
-		publicURL := fmt.Sprintf("%s/t/%s", cfg.ServerURL(), t.Slug)
+		publicURL := t.PublicURL
+		if publicURL == "" {
+			publicURL = fmt.Sprintf("%s/t/%s", cfg.ServerURL(), t.Slug)
+		}
 		log.Printf("reconnected — forwarding %s → localhost:%d", publicURL, port)
 	}
 }

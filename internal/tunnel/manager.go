@@ -62,11 +62,17 @@ func (m *Manager) OpenTunnel(spec TunnelSpec) (*ActiveTunnel, error) {
 		return nil, fmt.Errorf("connecting tunnel for port %d: %w", spec.Port, err)
 	}
 
+	// Use server-provided public_url if available, otherwise construct from server URL
+	publicURL := t.PublicURL
+	if publicURL == "" {
+		publicURL = fmt.Sprintf("%s/t/%s", m.cfg.ServerURL(), t.Slug)
+	}
+
 	at := &ActiveTunnel{
 		Spec:      spec,
 		TunnelID:  t.ID,
 		Slug:      t.Slug,
-		PublicURL: fmt.Sprintf("%s/t/%s", m.cfg.ServerURL(), t.Slug),
+		PublicURL: publicURL,
 		Connector: conn,
 	}
 
@@ -173,7 +179,11 @@ func (m *Manager) runTunnel(at *ActiveTunnel) error {
 		m.mu.Lock()
 		at.TunnelID = t.ID
 		at.Slug = t.Slug
-		at.PublicURL = fmt.Sprintf("%s/t/%s", m.cfg.ServerURL(), t.Slug)
+		if t.PublicURL != "" {
+			at.PublicURL = t.PublicURL
+		} else {
+			at.PublicURL = fmt.Sprintf("%s/t/%s", m.cfg.ServerURL(), t.Slug)
+		}
 		m.mu.Unlock()
 
 		// Reconnect control WebSocket
