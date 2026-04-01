@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,10 +16,14 @@ type Config struct {
 	APIKey        string `json:"api_key"`
 	DefaultTTL    string `json:"default_ttl"`
 	TLSSkipVerify bool   `json:"tls_skip_verify"`
+	DeviceID      string `json:"device_id"`
 
 	// ExplicitKey, if set, takes precedence over APIKey and env vars.
 	// Used by the daemon to pass tunnel-server-specific API keys.
 	ExplicitKey string `json:"-"`
+
+	// configPath is the path to the config file (for saving device_id)
+	configPath string
 }
 
 // Load reads config from ~/.nullbore/config.toml (simple key=value parsing).
@@ -64,10 +70,40 @@ func Load() (*Config, error) {
 			cfg.Dashboard = val
 		case "tls_skip_verify":
 			cfg.TLSSkipVerify = val == "true" || val == "1" || val == "yes"
+		case "device_id":
+			cfg.DeviceID = val
 		}
 	}
 
+	cfg.configPath = path
+
+	// Auto-generate device_id if missing
+	if cfg.DeviceID == "" {
+		cfg.DeviceID = generateDeviceID()
+		cfg.appendToFile("device_id", cfg.DeviceID)
+	}
+
 	return cfg, nil
+}
+
+// generateDeviceID creates a random 16-byte hex device identifier.
+func generateDeviceID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// appendToFile appends a key=value line to the config file.
+func (c *Config) appendToFile(key, value string) {
+	if c.configPath == "" {
+		return
+	}
+	f, err := os.OpenFile(c.configPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "\n# Auto-generated device identifier\n%s = \"%s\"\n", key, value)
 }
 
 // ServerURL returns the base server URL, with env override.

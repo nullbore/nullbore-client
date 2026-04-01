@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/nullbore/nullbore-client/internal/config"
@@ -14,9 +15,13 @@ import (
 
 // Client communicates with the NullBore server REST API.
 type Client struct {
-	cfg    *config.Config
-	http   *http.Client
+	cfg      *config.Config
+	http     *http.Client
+	takeover bool
 }
+
+// SetTakeover enables/disables the device takeover flag for the next request.
+func (c *Client) SetTakeover(v bool) { c.takeover = v }
 
 // Tunnel represents a tunnel from the API.
 type Tunnel struct {
@@ -152,11 +157,27 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
+	// Send device identity headers
+	if c.cfg.DeviceID != "" {
+		req.Header.Set("X-NullBore-Device-ID", c.cfg.DeviceID)
+	}
+	if hostname, _ := os.Hostname(); hostname != "" {
+		req.Header.Set("X-NullBore-Device-Hostname", hostname)
+	}
+	if c.takeover {
+		req.Header.Set("X-NullBore-Device-Takeover", "true")
+	}
+
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Check for device warning
+	if warning := resp.Header.Get("X-NullBore-Device-Warning"); warning != "" {
+		fmt.Fprintf(os.Stderr, "\n⚠️  %s\n\n", warning)
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

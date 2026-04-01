@@ -47,6 +47,8 @@ func Run(args []string) error {
 		return cmdDaemon(cfg)
 	case "update":
 		return cmdUpdate(args[1:])
+	case "device":
+		return cmdDevice(cfg, args[1:])
 	case "version":
 		fmt.Printf("nullbore %s\n", version)
 		checkUpdateQuiet()
@@ -466,6 +468,46 @@ func runStaticTunnels(cfg *config.Config, spec string) error {
 	}()
 
 	return mgr.Run()
+}
+
+func cmdDevice(cfg *config.Config, args []string) error {
+	if len(args) == 0 {
+		// Show device info
+		hostname, _ := os.Hostname()
+		fmt.Printf("Device ID:   %s\n", cfg.DeviceID)
+		fmt.Printf("Hostname:    %s\n", hostname)
+		return nil
+	}
+
+	switch args[0] {
+	case "info":
+		hostname, _ := os.Hostname()
+		fmt.Printf("Device ID:   %s\n", cfg.DeviceID)
+		fmt.Printf("Hostname:    %s\n", hostname)
+		return nil
+
+	case "takeover":
+		requireKey(cfg)
+		c := client.New(cfg)
+		hostname, _ := os.Hostname()
+
+		fmt.Printf("Taking over API key for this device (%s)...\n", hostname)
+
+		// Set takeover flag — client.do will send device headers,
+		// we just need to also send the takeover header
+		c.SetTakeover(true)
+		_, err := c.ListTunnels()
+		c.SetTakeover(false)
+		if err != nil {
+			return fmt.Errorf("takeover failed: %w", err)
+		}
+
+		fmt.Println("✅ Device takeover complete. This machine is now bound to your API key.")
+		return nil
+
+	default:
+		return fmt.Errorf("unknown device command: %s (try: info, takeover)", args[0])
+	}
 }
 
 func cmdUpdate(args []string) error {
