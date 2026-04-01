@@ -188,3 +188,32 @@ func TestPortListParsing(t *testing.T) {
 		t.Error("Set(0) should error")
 	}
 }
+
+func TestSanitizeHostname(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"pjs-macbook", "pjs-macbook"},
+		{"PJs-MacBook-Pro.local", "pjs-macbook-pro-local"},
+		{"MY_WORK_PC", "my-work-pc"},
+		{"server.example.com", "server-example-com"},
+		{"simple", "simple"},
+		{"ALLCAPS", "allcaps"},
+		{"with spaces", "with-spaces"},
+		{"--leading-trailing--", "leading-trailing"},
+		{"a", "a"},
+		{"", ""},
+		{"host--name", "host-name"},
+		{"this-is-a-really-long-hostname-that-exceeds-thirty-characters", "this-is-a-really-long-hostname"},
+		{"café-résumé", "caf-r-sum"},
+		{"192.168.1.1", "192-168-1-1"},
+	}
+
+	for _, tt := range tests {
+		got := sanitizeHostname(tt.input)
+		if got != tt.expected {
+			t.Errorf("sanitizeHostname(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
