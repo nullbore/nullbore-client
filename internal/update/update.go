@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	Repo       = "nullbore/nullbore-client"
-	releaseURL = "https://api.github.com/repos/" + Repo + "/releases/latest"
+	Repo          = "nullbore/nullbore-client"
+	latestURL     = "https://api.github.com/repos/" + Repo + "/releases/latest"
+	allReleasesURL = "https://api.github.com/repos/" + Repo + "/releases?per_page=1"
 )
 
 // Release represents a GitHub release.
@@ -32,9 +33,30 @@ type Asset struct {
 }
 
 // CheckLatest fetches the latest release from GitHub.
+// Tries /releases/latest first (stable releases), then falls back to
+// /releases?per_page=1 which includes pre-releases.
 func CheckLatest() (*Release, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(releaseURL)
+
+	// Try stable release first
+	rel, err := fetchRelease(client, latestURL)
+	if err == nil {
+		return rel, nil
+	}
+
+	// Fall back to newest release (includes pre-releases)
+	rels, err := fetchReleaseList(client, allReleasesURL)
+	if err != nil {
+		return nil, err
+	}
+	if len(rels) == 0 {
+		return nil, fmt.Errorf("no releases found")
+	}
+	return &rels[0], nil
+}
+
+func fetchRelease(client *http.Client, url string) (*Release, error) {
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("checking for updates: %w", err)
 	}
@@ -49,6 +71,24 @@ func CheckLatest() (*Release, error) {
 		return nil, fmt.Errorf("parsing release: %w", err)
 	}
 	return &rel, nil
+}
+
+func fetchReleaseList(client *http.Client, url string) ([]Release, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("checking for updates: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var rels []Release
+	if err := json.NewDecoder(resp.Body).Decode(&rels); err != nil {
+		return nil, fmt.Errorf("parsing releases: %w", err)
+	}
+	return rels, nil
 }
 
 // IsNewer returns true if the release version is newer than current.
