@@ -51,6 +51,9 @@ func Run(args []string) error {
 		fmt.Printf("nullbore %s\n", version)
 		checkUpdateQuiet()
 		return nil
+	case "_generate-docs":
+		fmt.Print(GenerateDocs())
+		return nil
 	case "help", "--help", "-h":
 		return printUsage()
 	default:
@@ -525,7 +528,7 @@ Examples:
 Configuration:
   ~/.nullbore/config.toml
   
-  server = "https://api.nullbore.com"
+  server = "https://tunnel.nullbore.com"
   api_key = "nbk_..."
   default_ttl = "1h"
 
