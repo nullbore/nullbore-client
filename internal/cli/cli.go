@@ -77,7 +77,18 @@ func (p *portList) Set(val string) error {
 	return nil
 }
 
+// requireKey checks that an API key is configured and returns a clear error if not.
+func requireKey(cfg *config.Config) error {
+	if cfg.Token() == "" {
+		return fmt.Errorf("no API key configured\n\n  Set your key in one of:\n    1. ~/.nullbore/config.toml → api_key = \"nbk_...\"\n    2. Environment variable   → export NULLBORE_API_KEY=\"nbk_...\"\n\n  Get a key at https://nullbore.com/dashboard")
+	}
+	return nil
+}
+
 func cmdOpen(cfg *config.Config, args []string) error {
+	if err := requireKey(cfg); err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("open", flag.ExitOnError)
 
 	// Support both old-style --port N and new repeatable -p PORT:NAME
@@ -159,6 +170,9 @@ func cmdOpen(cfg *config.Config, args []string) error {
 }
 
 func cmdList(cfg *config.Config) error {
+	if err := requireKey(cfg); err != nil {
+		return err
+	}
 	c := client.New(cfg)
 	tunnels, err := c.ListTunnels()
 	if err != nil {
@@ -185,6 +199,9 @@ func cmdList(cfg *config.Config) error {
 }
 
 func cmdClose(cfg *config.Config, args []string) error {
+	if err := requireKey(cfg); err != nil {
+		return err
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("usage: nullbore close <tunnel-id-or-name>")
 	}
@@ -216,6 +233,9 @@ func cmdClose(cfg *config.Config, args []string) error {
 }
 
 func cmdRequests(cfg *config.Config, args []string) error {
+	if err := requireKey(cfg); err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("requests", flag.ExitOnError)
 	limit := fs.Int("limit", 20, "Number of requests to show")
 	fs.Parse(args)

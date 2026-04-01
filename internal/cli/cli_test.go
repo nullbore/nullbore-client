@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -100,7 +101,9 @@ func TestRunListWithTunnels(t *testing.T) {
 	defer ts.Close()
 
 	os.Setenv("NULLBORE_SERVER", ts.URL)
+	os.Setenv("NULLBORE_API_KEY", "test_key")
 	defer os.Unsetenv("NULLBORE_SERVER")
+	defer os.Unsetenv("NULLBORE_API_KEY")
 
 	err := Run([]string{"list"})
 	if err != nil {
@@ -119,7 +122,9 @@ func TestRunClose(t *testing.T) {
 	defer ts.Close()
 
 	os.Setenv("NULLBORE_SERVER", ts.URL)
+	os.Setenv("NULLBORE_API_KEY", "test_key")
 	defer os.Unsetenv("NULLBORE_SERVER")
+	defer os.Unsetenv("NULLBORE_API_KEY")
 
 	err := Run([]string{"close", "test-id"})
 	if err != nil {
@@ -128,9 +133,24 @@ func TestRunClose(t *testing.T) {
 }
 
 func TestRunCloseNoArg(t *testing.T) {
+	os.Setenv("NULLBORE_API_KEY", "test_key")
+	defer os.Unsetenv("NULLBORE_API_KEY")
 	err := Run([]string{"close"})
 	if err == nil {
 		t.Error("Run([close]) without arg should error")
+	}
+}
+
+func TestNoAPIKeyError(t *testing.T) {
+	os.Unsetenv("NULLBORE_API_KEY")
+	for _, cmd := range [][]string{{"list"}, {"open", "3000"}, {"close", "x"}} {
+		err := Run(cmd)
+		if err == nil {
+			t.Errorf("Run(%v) should error without API key", cmd)
+		}
+		if !strings.Contains(err.Error(), "no API key configured") {
+			t.Errorf("Run(%v) error should mention missing key, got: %v", cmd, err)
+		}
 	}
 }
 
