@@ -62,6 +62,29 @@ func Run(args []string) error {
 }
 
 // portList implements flag.Value for repeatable --port flags.
+// sanitizeHostname converts a hostname into a valid tunnel name component.
+// Lowercases, replaces non-alphanumeric with hyphens, trims, truncates to 30 chars.
+func sanitizeHostname(h string) string {
+	h = strings.ToLower(h)
+	var b strings.Builder
+	for _, c := range h {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			b.WriteRune(c)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	result := strings.Trim(b.String(), "-")
+	// Collapse consecutive hyphens
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
+	}
+	if len(result) > 30 {
+		result = result[:30]
+	}
+	return strings.Trim(result, "-")
+}
+
 type portList []tunnel.TunnelSpec
 
 func (p *portList) String() string { return fmt.Sprint(*p) }
@@ -121,9 +144,17 @@ func cmdOpen(cfg *config.Config, args []string) error {
 		return fmt.Errorf("at least one port is required\n\nUsage:\n  nullbore open --port 3000\n  nullbore open -p 3000:api -p 8080:web\n  nullbore open 3000 8080")
 	}
 
-	// Set TTL on all specs
+	// Set TTL on all specs, auto-generate name from hostname if not set
+	hostname, _ := os.Hostname()
 	for i := range ports {
 		ports[i].TTL = *ttl
+		if ports[i].Name == "" && hostname != "" {
+			// Auto-name: sanitize hostname to valid tunnel name chars
+			autoName := sanitizeHostname(hostname)
+			if autoName != "" {
+				ports[i].Name = fmt.Sprintf("%s-%d", autoName, ports[i].Port)
+			}
+		}
 	}
 
 	c := client.New(cfg)
