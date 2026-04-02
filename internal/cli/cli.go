@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -44,7 +45,7 @@ func Run(args []string) error {
 	case "status":
 		return cmdStatus(cfg)
 	case "daemon":
-		return cmdDaemon(cfg)
+		return cmdDaemon(cfg, args[1:])
 	case "update":
 		return cmdUpdate(args[1:])
 	case "device":
@@ -108,7 +109,7 @@ func (p *portList) Set(val string) error {
 // requireKey checks that an API key is configured and returns a clear error if not.
 func requireKey(cfg *config.Config) error {
 	if cfg.Token() == "" {
-		return fmt.Errorf("no API key configured\n\n  Set your key in one of:\n    1. ~/.nullbore/config.toml → api_key = \"nbk_...\"\n    2. Environment variable   → export NULLBORE_API_KEY=\"nbk_...\"\n\n  Get a key at https://nullbore.com/dashboard")
+		return fmt.Errorf("no API key configured\n\n  Set your key in one of:\n    1. ~/.config/nullbore/config.toml → api_key = \"nbk_...\"\n    2. Environment variable           → export NULLBORE_API_KEY=\"nbk_...\"\n\n  Get a key at https://nullbore.com/dashboard")
 	}
 	return nil
 }
@@ -345,13 +346,32 @@ func cmdStatus(cfg *config.Config) error {
 	if cfg.Token() != "" {
 		fmt.Printf("auth:    configured\n")
 	} else {
-		log.Printf("auth:    not configured (set api_key in ~/.nullbore/config.toml)")
+		log.Printf("auth:    not configured (set api_key in ~/.config/nullbore/config.toml)")
 	}
 
 	return nil
 }
 
-func cmdDaemon(cfg *config.Config) error {
+func cmdDaemon(cfg *config.Config, args []string) error {
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	detach := fs.Bool("detach", false, "Run daemon in background")
+	stop := fs.Bool("stop", false, "Stop a backgrounded daemon")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	configDir := config.ConfigDir()
+	pidPath := filepath.Join(configDir, "daemon.pid")
+	logPath := filepath.Join(configDir, "daemon.log")
+
+	if *stop {
+		return stopDaemon(pidPath)
+	}
+
+	if *detach {
+		return detachDaemon(pidPath, logPath)
+	}
+
 	// Static tunnel mode: NULLBORE_TUNNELS=host:port:slug,host:port:slug,...
 	if tunnelEnv := os.Getenv("NULLBORE_TUNNELS"); tunnelEnv != "" {
 		return runStaticTunnels(cfg, tunnelEnv)
@@ -371,10 +391,108 @@ func cmdDaemon(cfg *config.Config) error {
 		<-sigCh
 		log.Printf("shutting down daemon...")
 		d.Stop()
+		// Clean up PID file if we wrote one
+		os.Remove(pidPath)
 		os.Exit(0)
 	}()
 
 	return d.Run()
+}
+
+// detachDaemon re-execs the current binary as a background daemon process.
+func detachDaemon(pidPath, logPath string) error {
+	// Check if already running
+	if pid, err := readPID(pidPath); err == nil {
+		if process, err := os.FindProcess(pid); err == nil {
+			if err := process.Signal(syscall.Signal(0)); err == nil {
+				return fmt.Errorf("daemon already running (PID %d). Use 'nullbore daemon --stop' first", pid)
+			}
+		}
+	}
+
+	// Open log file
+	configDir := config.ConfigDir()
+	os.MkdirAll(configDir, 0700)
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("opening log file: %w", err)
+	}
+
+	// Re-exec ourselves with just "daemon" (no --detach) as a detached process
+	exe, err := os.Executable()
+	if err != nil {
+		logFile.Close()
+		return fmt.Errorf("finding executable: %w", err)
+	}
+
+	attr := &os.ProcAttr{
+		Dir: "/",
+		Env: os.Environ(),
+		Files: []*os.File{
+			os.Stdin,  // stdin (will be /dev/null effectively)
+			logFile,   // stdout → log
+			logFile,   // stderr → log
+		},
+		Sys: &syscall.SysProcAttr{
+			Setsid: true, // new session — fully detached
+		},
+	}
+
+	proc, err := os.StartProcess(exe, []string{exe, "daemon"}, attr)
+	if err != nil {
+		logFile.Close()
+		return fmt.Errorf("starting daemon: %w", err)
+	}
+	logFile.Close()
+
+	// Write PID file
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", proc.Pid)), 0644)
+
+	fmt.Printf("Daemon started (PID %d)\n", proc.Pid)
+	fmt.Printf("  Log: %s\n", logPath)
+	fmt.Printf("  Stop: nullbore daemon --stop\n")
+
+	// Release the child — we don't wait for it
+	proc.Release()
+	return nil
+}
+
+// stopDaemon reads the PID file and sends SIGTERM to the daemon.
+func stopDaemon(pidPath string) error {
+	pid, err := readPID(pidPath)
+	if err != nil {
+		return fmt.Errorf("no daemon PID file found — is a daemon running?")
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		os.Remove(pidPath)
+		return fmt.Errorf("process %d not found", pid)
+	}
+
+	// Check if process is alive
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		os.Remove(pidPath)
+		return fmt.Errorf("daemon (PID %d) is not running (stale PID file removed)", pid)
+	}
+
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("sending signal to daemon: %w", err)
+	}
+
+	os.Remove(pidPath)
+	fmt.Printf("Daemon (PID %d) stopped.\n", pid)
+	return nil
+}
+
+// readPID reads a PID from a file.
+func readPID(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(data)))
 }
 
 // runStaticTunnels opens tunnels from NULLBORE_TUNNELS env var.
@@ -613,7 +731,7 @@ Examples:
   nullbore open 3000 8080 5432               # multiple tunnels (positional)
 
 Configuration:
-  ~/.nullbore/config.toml
+  ~/.config/nullbore/config.toml  (or $XDG_CONFIG_HOME/nullbore/config.toml)
   
   server = "https://tunnel.nullbore.com"
   api_key = "nbk_..."
@@ -626,9 +744,13 @@ Environment:
   NULLBORE_TLS_SKIP_VERIFY    Skip TLS verification (1/true)
 
 Daemon mode:
-  Reads tunnel definitions from ~/.nullbore/config.toml and keeps them
-  open persistently. Watches config for changes (hot-reload every 10s).
-  One-off 'nullbore open' commands coexist on the same device.
+  Reads tunnel definitions from config.toml and keeps them open persistently.
+  Watches config for changes (hot-reload every 10s). One-off 'nullbore open'
+  commands coexist on the same device.
+
+  nullbore daemon                             # foreground (good for systemd)
+  nullbore daemon --detach                    # background, writes PID file
+  nullbore daemon --stop                      # stop backgrounded daemon
 
   Config example:
     [[tunnels]]
@@ -640,6 +762,8 @@ Daemon mode:
     port = 5432
     name = "postgres"
     subdomain = "db"
+
+Tip: Run "nullbore daemon" to start persistent tunnels from your config.
 `)
 	return nil
 }

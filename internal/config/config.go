@@ -50,19 +50,73 @@ type Config struct {
 	configPath string
 }
 
-// Load reads config from ~/.nullbore/config.toml (simple key=value parsing).
+// ConfigDir returns the NullBore config directory path, following XDG conventions.
+// Priority: $XDG_CONFIG_HOME/nullbore → ~/.config/nullbore → ~/.nullbore (legacy)
+func ConfigDir() string {
+	// Check XDG_CONFIG_HOME first
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "nullbore")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	// Default XDG path
+	return filepath.Join(home, ".config", "nullbore")
+}
+
+// resolveConfigPath finds the config file, migrating from legacy path if needed.
+func resolveConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	xdgDir := ConfigDir()
+	xdgPath := filepath.Join(xdgDir, "config.toml")
+	legacyPath := filepath.Join(home, ".nullbore", "config.toml")
+
+	// If XDG path exists, use it
+	if _, err := os.Stat(xdgPath); err == nil {
+		return xdgPath
+	}
+
+	// If legacy path exists, migrate it
+	if _, err := os.Stat(legacyPath); err == nil {
+		// Create XDG directory
+		if mkErr := os.MkdirAll(xdgDir, 0700); mkErr == nil {
+			// Copy file to new location
+			if data, readErr := os.ReadFile(legacyPath); readErr == nil {
+				if writeErr := os.WriteFile(xdgPath, data, 0600); writeErr == nil {
+					// Rename old dir to signal migration
+					backupPath := filepath.Join(home, ".nullbore.migrated")
+					os.Rename(filepath.Join(home, ".nullbore"), backupPath)
+					fmt.Fprintf(os.Stderr, "Config migrated: ~/.nullbore/ → %s\n", xdgDir)
+					fmt.Fprintf(os.Stderr, "Old config backed up to ~/.nullbore.migrated/\n")
+					return xdgPath
+				}
+			}
+		}
+		// Migration failed — fall back to legacy
+		return legacyPath
+	}
+
+	// Neither exists — use XDG path (will be created on first write)
+	return xdgPath
+}
+
+// Load reads config from the NullBore config file (XDG or legacy path).
 func Load() (*Config, error) {
 	cfg := &Config{
 		Server:     "http://localhost:8443",
 		DefaultTTL: "1h",
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
+	path := resolveConfigPath()
+	if path == "" {
 		return cfg, nil
 	}
 
-	path := filepath.Join(home, ".nullbore", "config.toml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
