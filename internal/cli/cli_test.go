@@ -142,7 +142,22 @@ func TestRunCloseNoArg(t *testing.T) {
 }
 
 func TestNoAPIKeyError(t *testing.T) {
+	// Isolate from any real config files
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origXDG := os.Getenv("XDG_CONFIG_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Unsetenv("XDG_CONFIG_HOME")
 	os.Unsetenv("NULLBORE_API_KEY")
+	defer func() {
+		os.Setenv("HOME", origHome)
+		if origXDG != "" {
+			os.Setenv("XDG_CONFIG_HOME", origXDG)
+		} else {
+			os.Unsetenv("XDG_CONFIG_HOME")
+		}
+	}()
+
 	for _, cmd := range [][]string{{"list"}, {"open", "3000"}, {"close", "x"}} {
 		err := Run(cmd)
 		if err == nil {

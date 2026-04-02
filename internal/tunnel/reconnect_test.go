@@ -62,8 +62,8 @@ func TestReconnectAfterDisconnect(t *testing.T) {
 		RunWithFullReconnect(cfg, apiClient, 3000, "reconnect-test", "1h", connector)
 	}()
 
-	// Wait for at least 2 reconnect cycles
-	deadline := time.After(10 * time.Second)
+	// Wait for at least 2 reconnect cycles (generous timeout for -race)
+	deadline := time.After(30 * time.Second)
 	for {
 		if controlCount.Load() >= 2 && createCount.Load() >= 1 {
 			break
@@ -72,7 +72,7 @@ func TestReconnectAfterDisconnect(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("timed out: creates=%d controls=%d", createCount.Load(), controlCount.Load())
 		default:
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 
@@ -80,7 +80,7 @@ func TestReconnectAfterDisconnect(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("RunWithFullReconnect did not exit after Close()")
 	}
 
@@ -103,7 +103,7 @@ func TestReconnectServerDown(t *testing.T) {
 	}()
 
 	// Let it fail a couple times with backoff, then shut down
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 	connector.Close()
 
 	select {
@@ -111,7 +111,7 @@ func TestReconnectServerDown(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("RunWithFullReconnect did not exit after Close()")
 	}
 }

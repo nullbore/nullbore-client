@@ -107,12 +107,18 @@ func resolveConfigPath() string {
 
 // Load reads config from the NullBore config file (XDG or legacy path).
 func Load() (*Config, error) {
+	path := resolveConfigPath()
+	return LoadFrom(path)
+}
+
+// LoadFrom reads config from a specific file path.
+// If path is empty or the file doesn't exist, returns defaults.
+func LoadFrom(path string) (*Config, error) {
 	cfg := &Config{
 		Server:     "http://localhost:8443",
 		DefaultTTL: "1h",
 	}
 
-	path := resolveConfigPath()
 	if path == "" {
 		return cfg, nil
 	}
