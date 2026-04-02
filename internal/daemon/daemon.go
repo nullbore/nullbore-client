@@ -1,7 +1,13 @@
 package daemon
 
 import (
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -10,9 +16,7 @@ import (
 	"github.com/nullbore/nullbore-client/internal/tunnel"
 )
 
-// Daemon manages persistent tunnel connections from config.toml.
-// The config file is the single source of truth for what tunnels should run.
-// One-off `nullbore open` tunnels coexist independently on the same device.
+// Daemon manages persistent tunnel connections from config.toml or the dashboard.
 type Daemon struct {
 	cfg    *config.Config
 	client *client.Client
@@ -38,21 +42,45 @@ func specKey(s config.TunnelSpec) string {
 	if name == "" {
 		name = s.Subdomain
 	}
-	return name + ":" + string(rune(s.Port+'0'))
+	return name + ":" + fmt.Sprintf("%d", s.Port)
 }
 
-// Run starts the daemon: opens tunnels from config and watches for changes.
+// DashboardConfig is the response from /api/daemon/configs.
+type DashboardConfig struct {
+	Configs      []DashboardTunnelConfig `json:"configs"`
+	TunnelServer string                  `json:"tunnel_server"`
+	TunnelAPIKey string                  `json:"tunnel_api_key,omitempty"`
+}
+
+// DashboardTunnelConfig is a tunnel config from the dashboard.
+type DashboardTunnelConfig struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	LocalPort int    `json:"local_port"`
+	Subdomain string `json:"subdomain"`
+	TTL       string `json:"ttl"`
+	IdleTTL   bool   `json:"idle_ttl"`
+	Active    bool   `json:"active"`
+	TunnelID  string `json:"tunnel_id,omitempty"`
+}
+
+// Run starts the daemon. If no local tunnel config is defined, it falls back
+// to polling the dashboard for tunnel configs.
 func (d *Daemon) Run() error {
 	log.Printf("nullbore daemon starting")
-	log.Printf("server: %s", d.cfg.ServerURL())
 
-	if len(d.cfg.Tunnels) == 0 {
-		log.Printf("no tunnels defined in config — daemon will idle")
-		log.Printf("add [[tunnels]] blocks to ~/.nullbore/config.toml")
-		// Keep running so one-off `nullbore open` tunnels still work on same key
-		select {}
+	// If config.toml has [[tunnels]], use local config mode
+	if len(d.cfg.Tunnels) > 0 {
+		return d.runLocal()
 	}
 
+	// Otherwise try dashboard-polling mode
+	return d.runDashboard()
+}
+
+// runLocal manages tunnels from config.toml.
+func (d *Daemon) runLocal() error {
+	log.Printf("server: %s", d.cfg.ServerURL())
 	log.Printf("config: %d tunnel(s) defined", len(d.cfg.Tunnels))
 
 	// Initial sync from config
@@ -77,6 +105,129 @@ func (d *Daemon) Run() error {
 		}
 	}
 	return nil
+}
+
+// runDashboard polls the dashboard for tunnel configs.
+func (d *Daemon) runDashboard() error {
+	dashURL := d.cfg.DashboardURL()
+	log.Printf("dashboard: %s/dashboard", dashURL)
+
+	// Authenticate with dashboard
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	if d.cfg.InsecureSkipVerify() {
+		httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+
+	// Validate auth
+	if err := d.dashboardAuth(httpClient, dashURL); err != nil {
+		return fmt.Errorf("dashboard authentication failed: %w", err)
+	}
+	log.Printf("authenticated with dashboard")
+
+	// Initial poll
+	d.pollDashboard(httpClient, dashURL)
+
+	// Poll every 5s
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		d.pollDashboard(httpClient, dashURL)
+	}
+	return nil
+}
+
+// dashboardAuth validates the API key against the dashboard.
+func (d *Daemon) dashboardAuth(httpClient *http.Client, dashURL string) error {
+	req, err := http.NewRequest("GET", dashURL+"/api/daemon/configs", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+d.cfg.Token())
+	if hostname, _ := os.Hostname(); hostname != "" {
+		req.Header.Set("X-NullBore-Device-Hostname", hostname)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connection failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 401 {
+		return fmt.Errorf("invalid API key")
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// pollDashboard fetches configs from the dashboard and reconciles.
+func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
+	req, err := http.NewRequest("GET", dashURL+"/api/daemon/configs", nil)
+	if err != nil {
+		log.Printf("[dashboard] request error: %v", err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+d.cfg.Token())
+	if hostname, _ := os.Hostname(); hostname != "" {
+		req.Header.Set("X-NullBore-Device-Hostname", hostname)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("[dashboard] poll error: %v (will retry)", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("[dashboard] poll error (%d): %s (will retry)", resp.StatusCode, string(body))
+		return
+	}
+
+	var dashCfg DashboardConfig
+	if err := json.NewDecoder(resp.Body).Decode(&dashCfg); err != nil {
+		log.Printf("[dashboard] parse error: %v", err)
+		return
+	}
+
+	// Override tunnel server from dashboard if provided
+	if dashCfg.TunnelServer != "" && d.cfg.ServerURL() != dashCfg.TunnelServer {
+		d.cfg.Server = dashCfg.TunnelServer
+	}
+
+	// Convert active dashboard configs to TunnelSpecs
+	var specs []config.TunnelSpec
+	for _, c := range dashCfg.Configs {
+		if !c.Active {
+			continue
+		}
+		spec := config.TunnelSpec{
+			Port:      c.LocalPort,
+			Name:      c.Name,
+			Subdomain: c.Subdomain,
+			TTL:       c.TTL,
+			IdleTTL:   c.IdleTTL,
+		}
+		specs = append(specs, spec)
+	}
+
+	// Reconcile if changed
+	if tunnelsChanged(d.cfg.Tunnels, specs) {
+		if len(specs) == 0 {
+			log.Printf("[dashboard] no active tunnels — waiting for configs")
+		} else {
+			log.Printf("[dashboard] %d active tunnel(s) — reconciling", len(specs))
+		}
+		d.cfg.Tunnels = specs
+		d.reconcile(specs)
+	}
 }
 
 // tunnelsChanged compares two tunnel spec lists.
