@@ -15,6 +15,7 @@ import (
 	"github.com/nullbore/nullbore-client/internal/client"
 	"github.com/nullbore/nullbore-client/internal/config"
 	"github.com/nullbore/nullbore-client/internal/tunnel"
+	"github.com/nullbore/nullbore-client/internal/update"
 )
 
 // Daemon manages persistent tunnel connections from config.toml or the dashboard.
@@ -30,15 +31,47 @@ type Daemon struct {
 	dashMode   bool
 	dashURL    string
 	dashClient *http.Client
+
+	// Version for update checks
+	version string
 }
 
 // New creates a new daemon.
-func New(cfg *config.Config) *Daemon {
+func New(cfg *config.Config, version string) *Daemon {
 	return &Daemon{
 		cfg:      cfg,
 		client:   client.New(cfg),
 		managers: make(map[string]*tunnel.Manager),
 		specs:    make(map[string]config.TunnelSpec),
+		version:  version,
+	}
+}
+
+// startUpdateChecker runs a background goroutine that checks for updates periodically.
+func (d *Daemon) startUpdateChecker() {
+	go func() {
+		// Check once at startup (after a short delay)
+		time.Sleep(5 * time.Second)
+		d.checkUpdate()
+
+		// Then every 6 hours
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			d.checkUpdate()
+		}
+	}()
+}
+
+func (d *Daemon) checkUpdate() {
+	rel, err := update.CheckLatest()
+	if err != nil {
+		return // silently ignore
+	}
+	if update.IsNewer(d.version, rel.TagName) {
+		log.Printf("⬆ Update available: %s → %s", d.version, rel.TagName)
+		log.Printf("  Run: nullbore update")
+		log.Printf("  Or:  curl -fsSL https://nullbore.com/install.sh | sh")
 	}
 }
 
@@ -86,6 +119,7 @@ func (d *Daemon) Run() error {
 
 // runLocal manages tunnels from config.toml.
 func (d *Daemon) runLocal() error {
+	d.startUpdateChecker()
 	log.Printf("server: %s", d.cfg.ServerURL())
 	log.Printf("config: %d tunnel(s) defined", len(d.cfg.Tunnels))
 
@@ -115,6 +149,7 @@ func (d *Daemon) runLocal() error {
 
 // runDashboard polls the dashboard for tunnel configs.
 func (d *Daemon) runDashboard() error {
+	d.startUpdateChecker()
 	d.dashURL = d.cfg.DashboardURL()
 	d.dashMode = true
 	log.Printf("dashboard: %s/dashboard", d.dashURL)

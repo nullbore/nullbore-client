@@ -361,7 +361,7 @@ func cmdDaemon(cfg *config.Config) error {
 		return fmt.Errorf("API key required for daemon mode. Set api_key in config or NULLBORE_API_KEY env")
 	}
 
-	d := daemon.New(cfg)
+	d := daemon.New(cfg, version)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -537,23 +537,35 @@ func cmdUpdate(args []string) error {
 
 	downloadURL, err := update.FindAsset(rel)
 	if err != nil {
-		return err
+		fmt.Printf("\n  ❌ %v\n", err)
+		printUpdateFallback()
+		return nil
 	}
 
 	fmt.Printf("  Downloading %s...\n", update.AssetName())
 	tmpPath, err := update.Download(downloadURL)
 	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
+		fmt.Printf("\n  ❌ Download failed: %v\n", err)
+		printUpdateFallback()
+		return nil
 	}
 
 	fmt.Println("  Installing...")
 	if err := update.ReplaceBinary(tmpPath); err != nil {
 		os.Remove(tmpPath)
-		return fmt.Errorf("install failed: %w", err)
+		fmt.Printf("\n  ❌ Install failed: %v\n", err)
+		printUpdateFallback()
+		return nil
 	}
 
 	fmt.Printf("  ✅ Updated to %s\n", rel.TagName)
 	return nil
+}
+
+func printUpdateFallback() {
+	fmt.Println("\n  You can update manually with:")
+	fmt.Println("    curl -fsSL https://nullbore.com/install.sh | sh")
+	fmt.Println()
 }
 
 // checkUpdateQuiet runs a non-blocking version check and prints a hint if outdated.

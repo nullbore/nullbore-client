@@ -57,7 +57,7 @@ func TestNewDaemon(t *testing.T) {
 		},
 	}
 
-	d := New(cfg)
+	d := New(cfg, "0.0.0-test")
 	if d == nil {
 		t.Fatal("daemon should not be nil")
 	}
