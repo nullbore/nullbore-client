@@ -13,7 +13,7 @@ import (
 // isTopLevelKey returns true if the key is a known top-level config key.
 func isTopLevelKey(key string) bool {
 	switch key {
-	case "server", "api_key", "default_ttl", "dashboard", "tls_skip_verify", "device_id":
+	case "server", "api_key", "default_ttl", "dashboard", "tls_skip_verify", "device_id", "device_name":
 		return true
 	}
 	return false
@@ -37,6 +37,7 @@ type Config struct {
 	DefaultTTL    string `json:"default_ttl"`
 	TLSSkipVerify bool   `json:"tls_skip_verify"`
 	DeviceID      string `json:"device_id"`
+	DeviceName    string `json:"device_name"`
 
 	// Tunnels defines persistent tunnels managed by the daemon.
 	Tunnels []TunnelSpec `json:"tunnels,omitempty"`
@@ -138,6 +139,8 @@ func Load() (*Config, error) {
 			cfg.TLSSkipVerify = val == "true" || val == "1" || val == "yes"
 		case "device_id":
 			cfg.DeviceID = val
+		case "device_name":
+			cfg.DeviceName = val
 		}
 	}
 
@@ -152,6 +155,14 @@ func Load() (*Config, error) {
 	if cfg.DeviceID == "" {
 		cfg.DeviceID = generateDeviceID()
 		cfg.appendToFile("device_id", cfg.DeviceID)
+	}
+
+	// Auto-fill device_name from hostname if missing
+	if cfg.DeviceName == "" {
+		if hostname, err := os.Hostname(); err == nil && hostname != "" {
+			cfg.DeviceName = hostname
+			cfg.appendToFile("device_name", cfg.DeviceName)
+		}
 	}
 
 	return cfg, nil

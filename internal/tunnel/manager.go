@@ -12,10 +12,11 @@ import (
 
 // TunnelSpec defines a single tunnel to open.
 type TunnelSpec struct {
-	Port int
-	Host string // target host (default "", meaning localhost)
-	Name string
-	TTL  string
+	Port   int
+	Host   string // target host (default "", meaning localhost)
+	Name   string
+	TTL    string
+	Source string // "cli" or "daemon"
 }
 
 // ActiveTunnel tracks a running tunnel.
@@ -47,7 +48,11 @@ func NewManager(cfg *config.Config, apiClient *client.Client) *Manager {
 
 // OpenTunnel creates and connects a single tunnel, adding it to the manager.
 func (m *Manager) OpenTunnel(spec TunnelSpec) (*ActiveTunnel, error) {
-	t, err := m.apiClient.CreateTunnel(spec.Port, spec.Name, spec.TTL)
+	src := spec.Source
+	if src == "" {
+		src = "cli"
+	}
+	t, err := m.apiClient.CreateTunnelWithSource(spec.Port, spec.Name, spec.TTL, src)
 	if err != nil {
 		return nil, fmt.Errorf("creating tunnel for port %d: %w", spec.Port, err)
 	}
@@ -163,7 +168,11 @@ func (m *Manager) runTunnel(at *ActiveTunnel) error {
 
 		// Re-create the tunnel (server may have restarted)
 		log.Printf("[%s] re-registering tunnel...", at.Slug)
-		t, err := m.apiClient.CreateTunnel(at.Spec.Port, at.Spec.Name, at.Spec.TTL)
+		src := at.Spec.Source
+		if src == "" {
+			src = "cli"
+		}
+		t, err := m.apiClient.CreateTunnelWithSource(at.Spec.Port, at.Spec.Name, at.Spec.TTL, src)
 		if err != nil {
 			log.Printf("[%s] re-registration failed: %v", at.Slug, err)
 			continue

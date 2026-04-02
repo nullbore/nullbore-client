@@ -57,8 +57,19 @@ func New(cfg *config.Config) *Client {
 
 // CreateTunnel registers a new tunnel with the server.
 func (c *Client) CreateTunnel(port int, name, ttl string) (*Tunnel, error) {
+	return c.CreateTunnelWithSource(port, name, ttl, "cli")
+}
+
+// CreateTunnelWithSource registers a tunnel, tagging it with a source ("cli" or "daemon").
+func (c *Client) CreateTunnelWithSource(port int, name, ttl, source string) (*Tunnel, error) {
+	deviceName := c.cfg.DeviceName
+	if deviceName == "" {
+		deviceName, _ = os.Hostname()
+	}
 	body := map[string]interface{}{
-		"local_port": port,
+		"local_port":  port,
+		"device_name": deviceName,
+		"source":      source,
 	}
 	if name != "" {
 		body["name"] = name
@@ -161,7 +172,9 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	if c.cfg.DeviceID != "" {
 		req.Header.Set("X-NullBore-Device-ID", c.cfg.DeviceID)
 	}
-	if hostname, _ := os.Hostname(); hostname != "" {
+	if c.cfg.DeviceName != "" {
+		req.Header.Set("X-NullBore-Device-Hostname", c.cfg.DeviceName)
+	} else if hostname, _ := os.Hostname(); hostname != "" {
 		req.Header.Set("X-NullBore-Device-Hostname", hostname)
 	}
 	if c.takeover {

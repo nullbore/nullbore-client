@@ -186,11 +186,16 @@ func (d *Daemon) reportTunnelConnected(name string, port int, tunnelID, publicUR
 	if !d.dashMode || d.dashClient == nil {
 		return
 	}
+	deviceName := d.cfg.DeviceName
+	if deviceName == "" {
+		deviceName, _ = os.Hostname()
+	}
 	body := map[string]interface{}{
-		"name":       name,
-		"local_port": port,
-		"tunnel_id":  tunnelID,
-		"public_url": publicURL,
+		"name":        name,
+		"local_port":  port,
+		"tunnel_id":   tunnelID,
+		"public_url":  publicURL,
+		"device_name": deviceName,
 	}
 	data, _ := json.Marshal(body)
 	req, err := http.NewRequest("POST", d.dashURL+"/api/daemon/report", bytes.NewReader(data))
@@ -204,7 +209,11 @@ func (d *Daemon) reportTunnelConnected(name string, port int, tunnelID, publicUR
 		log.Printf("[dashboard] report error: %v", err)
 		return
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("[dashboard] report failed (%d): %s", resp.StatusCode, string(body))
+	}
 }
 
 // dashboardAuth validates the API key against the dashboard.
@@ -369,11 +378,18 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 
 		mgr := tunnel.NewManager(d.cfg, d.client)
 
+		// Prefer subdomain for URL routing; fall back to config name for display
+		tunnelName := s.Subdomain
+		if tunnelName == "" {
+			tunnelName = s.Name
+		}
+
 		spec := tunnel.TunnelSpec{
-			Port: s.Port,
-			Host: s.Host,
-			Name: s.Subdomain,
-			TTL:  ttl,
+			Port:   s.Port,
+			Host:   s.Host,
+			Name:   tunnelName,
+			TTL:    ttl,
+			Source: "daemon",
 		}
 
 		at, err := mgr.OpenTunnel(spec)
