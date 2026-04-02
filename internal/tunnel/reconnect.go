@@ -29,7 +29,10 @@ func RunWithFullReconnect(
 		// Run until disconnect
 		connected, err := connector.runOnce()
 
-		if connector.closed {
+		connector.mu.Lock()
+		closed := connector.closed
+		connector.mu.Unlock()
+		if closed {
 			return nil
 		}
 
