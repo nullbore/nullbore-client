@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,11 @@ type Daemon struct {
 	mu       sync.Mutex
 	managers map[string]*tunnel.Manager // "port:name" → running manager
 	specs    map[string]config.TunnelSpec
+
+	// Dashboard mode
+	dashMode   bool
+	dashURL    string
+	dashClient *http.Client
 }
 
 // New creates a new daemon.
@@ -109,34 +115,61 @@ func (d *Daemon) runLocal() error {
 
 // runDashboard polls the dashboard for tunnel configs.
 func (d *Daemon) runDashboard() error {
-	dashURL := d.cfg.DashboardURL()
-	log.Printf("dashboard: %s/dashboard", dashURL)
+	d.dashURL = d.cfg.DashboardURL()
+	d.dashMode = true
+	log.Printf("dashboard: %s/dashboard", d.dashURL)
 
 	// Authenticate with dashboard
-	httpClient := &http.Client{Timeout: 15 * time.Second}
+	d.dashClient = &http.Client{Timeout: 15 * time.Second}
 	if d.cfg.InsecureSkipVerify() {
-		httpClient.Transport = &http.Transport{
+		d.dashClient.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
 	}
 
 	// Validate auth
-	if err := d.dashboardAuth(httpClient, dashURL); err != nil {
+	if err := d.dashboardAuth(d.dashClient, d.dashURL); err != nil {
 		return fmt.Errorf("dashboard authentication failed: %w", err)
 	}
 	log.Printf("authenticated with dashboard")
 
 	// Initial poll
-	d.pollDashboard(httpClient, dashURL)
+	d.pollDashboard(d.dashClient, d.dashURL)
 
 	// Poll every 5s
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		d.pollDashboard(httpClient, dashURL)
+		d.pollDashboard(d.dashClient, d.dashURL)
 	}
 	return nil
+}
+
+// reportTunnelConnected tells the dashboard about a successful tunnel connection.
+func (d *Daemon) reportTunnelConnected(name string, port int, tunnelID, publicURL string) {
+	if !d.dashMode || d.dashClient == nil {
+		return
+	}
+	body := map[string]interface{}{
+		"name":       name,
+		"local_port": port,
+		"tunnel_id":  tunnelID,
+		"public_url": publicURL,
+	}
+	data, _ := json.Marshal(body)
+	req, err := http.NewRequest("POST", d.dashURL+"/api/daemon/report", bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+d.cfg.Token())
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.dashClient.Do(req)
+	if err != nil {
+		log.Printf("[dashboard] report error: %v", err)
+		return
+	}
+	resp.Body.Close()
 }
 
 // dashboardAuth validates the API key against the dashboard.
@@ -315,6 +348,9 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 		}
 
 		log.Printf("[daemon] ✓ %s → %s", name, at.PublicURL)
+
+		// Report to dashboard if in dashboard mode
+		d.reportTunnelConnected(s.Name, s.Port, at.TunnelID, at.PublicURL)
 
 		// Start reconnect loop in background
 		go mgr.Run()
