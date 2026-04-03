@@ -25,6 +25,9 @@ func TestIsNewer(t *testing.T) {
 		{"0.1.0", "", false},            // empty latest
 		{"0.1.0-beta.1", "0.1.0-beta.2", true},
 		{"0.1.0-beta.1", "0.1.0-beta.1", false},
+		{"0.1.0-beta.9", "0.1.0-beta.10", true},  // numeric comparison, not string
+		{"0.1.0-beta.10", "0.1.0-beta.9", false},  // 10 > 9
+		{"0.1.0-beta.10", "0.1.0-beta.11", true},
 	}
 
 	for _, tt := range tests {

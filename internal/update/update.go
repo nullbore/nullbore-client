@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,7 +16,7 @@ import (
 const (
 	Repo          = "nullbore/nullbore-client"
 	latestURL     = "https://api.github.com/repos/" + Repo + "/releases/latest"
-	allReleasesURL = "https://api.github.com/repos/" + Repo + "/releases?per_page=1"
+	allReleasesURL = "https://api.github.com/repos/" + Repo + "/releases?per_page=10"
 )
 
 // Release represents a GitHub release.
@@ -52,7 +53,14 @@ func CheckLatest() (*Release, error) {
 	if len(rels) == 0 {
 		return nil, fmt.Errorf("no releases found")
 	}
-	return &rels[0], nil
+	// Find the highest version (GitHub order isn't always by version)
+	best := 0
+	for i := 1; i < len(rels); i++ {
+		if compareVersions(normalizeVersion(rels[i].TagName), normalizeVersion(rels[best].TagName)) > 0 {
+			best = i
+		}
+	}
+	return &rels[best], nil
 }
 
 func fetchRelease(client *http.Client, url string) (*Release, error) {
@@ -92,7 +100,7 @@ func fetchReleaseList(client *http.Client, url string) ([]Release, error) {
 }
 
 // IsNewer returns true if the release version is newer than current.
-// Simple string comparison after normalizing — works for semver tags.
+// Handles semver with pre-release tags like beta.N correctly.
 func IsNewer(current, latest string) bool {
 	current = normalizeVersion(current)
 	latest = normalizeVersion(latest)
@@ -106,7 +114,57 @@ func IsNewer(current, latest string) bool {
 		return true
 	}
 
-	return latest != current && latest > current
+	return latest != current && compareVersions(latest, current) > 0
+}
+
+// compareVersions compares two version strings.
+// Returns >0 if a > b, <0 if a < b, 0 if equal.
+// Handles versions like "0.1.0-beta.10" correctly.
+func compareVersions(a, b string) int {
+	partsA := splitVersion(a)
+	partsB := splitVersion(b)
+
+	maxLen := len(partsA)
+	if len(partsB) > maxLen {
+		maxLen = len(partsB)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var pA, pB string
+		if i < len(partsA) {
+			pA = partsA[i]
+		}
+		if i < len(partsB) {
+			pB = partsB[i]
+		}
+
+		// Try numeric comparison first
+		nA, errA := strconv.Atoi(pA)
+		nB, errB := strconv.Atoi(pB)
+		if errA == nil && errB == nil {
+			if nA != nB {
+				return nA - nB
+			}
+			continue
+		}
+
+		// String comparison for non-numeric parts
+		if pA != pB {
+			if pA < pB {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+// splitVersion splits a version string into comparable parts.
+// "0.1.0-beta.10" → ["0", "1", "0", "beta", "10"]
+func splitVersion(v string) []string {
+	// Replace - and . with a common delimiter
+	v = strings.ReplaceAll(v, "-", ".")
+	return strings.Split(v, ".")
 }
 
 // AssetName returns the expected binary name for this platform.
