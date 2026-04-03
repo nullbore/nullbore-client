@@ -105,6 +105,45 @@ func resolveConfigPath() string {
 	return xdgPath
 }
 
+// defaultConfigTemplate is written when no config file exists yet.
+const defaultConfigTemplate = `# NullBore client configuration
+# Docs: https://nullbore.com/docs/configuration
+
+# Tunnel server URL
+server = "https://tunnel.nullbore.com"
+
+# Your API key (get one at https://nullbore.com/dashboard)
+# api_key = "nbk_..."
+
+# Default TTL for tunnels (e.g. 30m, 1h, 2h, 24h, 168h)
+# default_ttl = "1h"
+
+# Dashboard URL (for daemon polling mode)
+# dashboard = "https://nullbore.com"
+
+# Skip TLS certificate verification (not recommended)
+# tls_skip_verify = false
+
+# Device name (auto-filled from hostname on first connect)
+# device_name = ""
+
+# --- Persistent tunnels (used by 'nullbore daemon') ---
+# Uncomment and configure to keep tunnels open automatically.
+#
+# [[tunnels]]
+# port = 3000
+# name = "my-api"
+# subdomain = "my-api"
+# ttl = "1h"
+# idle_ttl = false
+# host = "localhost"
+#
+# [[tunnels]]
+# port = 8080
+# name = "web"
+# ttl = "2h"
+`
+
 // Load reads config from the NullBore config file (XDG or legacy path).
 func Load() (*Config, error) {
 	path := resolveConfigPath()
@@ -126,6 +165,15 @@ func LoadFrom(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Write default config template
+			dir := filepath.Dir(path)
+			if mkErr := os.MkdirAll(dir, 0700); mkErr == nil {
+				if wErr := os.WriteFile(path, []byte(defaultConfigTemplate), 0600); wErr == nil {
+					cfg.configPath = path
+					fmt.Fprintf(os.Stderr, "Created config: %s\n", path)
+					fmt.Fprintf(os.Stderr, "Edit it to add your API key, then run: nullbore daemon\n")
+				}
+			}
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("reading config: %w", err)

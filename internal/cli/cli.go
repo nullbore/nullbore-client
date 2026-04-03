@@ -350,6 +350,9 @@ func cmdDaemon(cfg *config.Config, args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	detach := fs.Bool("detach", false, "Run daemon in background")
 	stop := fs.Bool("stop", false, "Stop a backgrounded daemon")
+	// Short aliases
+	fs.BoolVar(detach, "d", false, "Run daemon in background (short for --detach)")
+	fs.BoolVar(stop, "s", false, "Stop a backgrounded daemon (short for --stop)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -647,8 +650,8 @@ Daemon mode:
   commands coexist on the same device.
 
   nullbore daemon                             # foreground (good for systemd)
-  nullbore daemon --detach                    # background, writes PID file
-  nullbore daemon --stop                      # stop backgrounded daemon
+  nullbore daemon --detach (-d)               # background, writes PID file
+  nullbore daemon --stop (-s)                 # stop backgrounded daemon
 
   Config example:
     [[tunnels]]

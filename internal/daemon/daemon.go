@@ -137,6 +137,16 @@ func (d *Daemon) runLocal() error {
 			continue
 		}
 
+		// Check if core config changed (server, api_key, etc.) — requires full restart
+		if coreConfigChanged(d.cfg, newCfg) {
+			log.Printf("core config changed — restarting daemon")
+			d.Stop()
+			d.cfg = newCfg
+			d.client = client.New(newCfg)
+			d.reconcile(newCfg.Tunnels)
+			continue
+		}
+
 		// Check if tunnel specs changed
 		if tunnelsChanged(d.cfg.Tunnels, newCfg.Tunnels) {
 			log.Printf("config changed: reconciling tunnels")
@@ -305,6 +315,15 @@ func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 		d.cfg.Tunnels = specs
 		d.reconcile(specs)
 	}
+}
+
+// coreConfigChanged returns true if server, api_key, dashboard, or tls settings changed.
+func coreConfigChanged(old, new *config.Config) bool {
+	return old.Server != new.Server ||
+		old.APIKey != new.APIKey ||
+		old.Dashboard != new.Dashboard ||
+		old.TLSSkipVerify != new.TLSSkipVerify ||
+		old.DefaultTTL != new.DefaultTTL
 }
 
 // tunnelsChanged compares two tunnel spec lists.
