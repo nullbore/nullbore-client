@@ -361,6 +361,16 @@ func cmdDaemon(cfg *config.Config, args []string) error {
 	pidPath := filepath.Join(configDir, "daemon.pid")
 	logPath := filepath.Join(configDir, "daemon.log")
 
+	// Also check legacy path for PID file (daemon may have been started with older version)
+	if _, err := os.Stat(pidPath); os.IsNotExist(err) {
+		if home, hErr := os.UserHomeDir(); hErr == nil {
+			legacyPid := filepath.Join(home, ".nullbore", "daemon.pid")
+			if _, lErr := os.Stat(legacyPid); lErr == nil {
+				pidPath = legacyPid
+			}
+		}
+	}
+
 	if *stop {
 		return stopDaemon(pidPath)
 	}
