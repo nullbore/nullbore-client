@@ -147,17 +147,11 @@ func cmdOpen(cfg *config.Config, args []string) error {
 		return fmt.Errorf("at least one port is required\n\nUsage:\n  nullbore open --port 3000\n  nullbore open -p 3000:api -p 8080:web\n  nullbore open 3000 8080")
 	}
 
-	// Set TTL on all specs, auto-generate name from hostname if not set
-	hostname, _ := os.Hostname()
+	// Set TTL on all specs
+	// Named tunnels are a Hobby+ feature — don't auto-generate names.
+	// Users who want a named URL use --name explicitly.
 	for i := range ports {
 		ports[i].TTL = *ttl
-		if ports[i].Name == "" && hostname != "" {
-			// Auto-name: sanitize hostname to valid tunnel name chars
-			autoName := sanitizeHostname(hostname)
-			if autoName != "" {
-				ports[i].Name = fmt.Sprintf("%s-%d", autoName, ports[i].Port)
-			}
-		}
 	}
 
 	c := client.New(cfg)
