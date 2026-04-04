@@ -55,9 +55,19 @@ func RunWithFullReconnect(
 		log.Printf("reconnecting in %s...", d)
 		time.Sleep(d)
 
-		// Re-create the tunnel (server may have restarted, losing in-memory state)
+		// Re-create the tunnel (server may have restarted, losing in-memory state).
+		// Use the previous slug as the name so the server reclaims the same URL.
+		reconnectName := name
+		if reconnectName == "" {
+			connector.mu.Lock()
+			prevSlug := connector.slug
+			connector.mu.Unlock()
+			if prevSlug != "" {
+				reconnectName = prevSlug
+			}
+		}
 		log.Printf("re-registering tunnel...")
-		t, err := apiClient.CreateTunnel(port, name, ttl)
+		t, err := apiClient.CreateTunnel(port, reconnectName, ttl)
 		if err != nil {
 			log.Printf("tunnel re-registration failed: %v", err)
 			continue // will retry with backoff
@@ -65,9 +75,10 @@ func RunWithFullReconnect(
 
 		debug.Printf("tunnel re-registered: id=%s slug=%s", t.ID, t.Slug)
 
-		// Update connector with new tunnel ID
+		// Update connector with new tunnel ID and slug
 		connector.mu.Lock()
 		connector.tunnelID = t.ID
+		connector.slug = t.Slug
 		connector.mu.Unlock()
 
 		// Reconnect control WebSocket

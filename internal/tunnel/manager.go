@@ -63,6 +63,7 @@ func (m *Manager) OpenTunnel(spec TunnelSpec) (*ActiveTunnel, error) {
 	} else {
 		conn = NewConnector(m.cfg, t.ID, spec.Port)
 	}
+	conn.SetSlug(t.Slug) // for reconnect reclaim
 	if err := conn.Connect(); err != nil {
 		return nil, fmt.Errorf("connecting tunnel for port %d: %w", spec.Port, err)
 	}
@@ -166,13 +167,18 @@ func (m *Manager) runTunnel(at *ActiveTunnel) error {
 			return nil
 		}
 
-		// Re-create the tunnel (server may have restarted)
+		// Re-create the tunnel (server may have restarted).
+		// Use previous slug as name to reclaim the same URL.
+		reconnectName := at.Spec.Name
+		if reconnectName == "" && at.Slug != "" {
+			reconnectName = at.Slug
+		}
 		log.Printf("[%s] re-registering tunnel...", at.Slug)
 		src := at.Spec.Source
 		if src == "" {
 			src = "cli"
 		}
-		t, err := m.apiClient.CreateTunnelWithSource(at.Spec.Port, at.Spec.Name, at.Spec.TTL, src)
+		t, err := m.apiClient.CreateTunnelWithSource(at.Spec.Port, reconnectName, at.Spec.TTL, src)
 		if err != nil {
 			log.Printf("[%s] re-registration failed: %v", at.Slug, err)
 			continue
@@ -183,6 +189,7 @@ func (m *Manager) runTunnel(at *ActiveTunnel) error {
 		// Update
 		at.Connector.mu.Lock()
 		at.Connector.tunnelID = t.ID
+		at.Connector.slug = t.Slug
 		at.Connector.mu.Unlock()
 
 		m.mu.Lock()

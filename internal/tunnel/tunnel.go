@@ -24,6 +24,7 @@ import (
 type Connector struct {
 	cfg       *config.Config
 	tunnelID  string
+	slug      string // current tunnel slug (for reconnect reclaim)
 	localPort int
 	localHost string // target host (default "127.0.0.1", can be docker service name)
 	control   *websocket.Conn
@@ -44,6 +45,13 @@ func NewConnector(cfg *config.Config, tunnelID string, localPort int) *Connector
 		localPort: localPort,
 		localHost: "127.0.0.1",
 	}
+}
+
+// SetSlug sets the current tunnel slug (for reconnect reclaim).
+func (c *Connector) SetSlug(slug string) {
+	c.mu.Lock()
+	c.slug = slug
+	c.mu.Unlock()
 }
 
 // NewConnectorWithHost creates a Connector targeting a specific host (for Docker/network use).
