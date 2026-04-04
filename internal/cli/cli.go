@@ -16,6 +16,7 @@ import (
 	"github.com/nullbore/nullbore-client/internal/client"
 	"github.com/nullbore/nullbore-client/internal/config"
 	"github.com/nullbore/nullbore-client/internal/daemon"
+	"github.com/nullbore/nullbore-client/internal/debug"
 	"github.com/nullbore/nullbore-client/internal/tunnel"
 	"github.com/nullbore/nullbore-client/internal/update"
 )
@@ -28,9 +29,30 @@ func Run(args []string) error {
 		return printUsage()
 	}
 
+	// Strip global flags before command dispatch
+	var filtered []string
+	for _, a := range args {
+		switch a {
+		case "--debug", "-v", "--verbose":
+			debug.Enabled = true
+		default:
+			filtered = append(filtered, a)
+		}
+	}
+	args = filtered
+
+	if len(args) == 0 {
+		return printUsage()
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	// Enable debug from config if not already set via flag
+	if cfg.Debug {
+		debug.Enabled = true
 	}
 
 	switch args[0] {

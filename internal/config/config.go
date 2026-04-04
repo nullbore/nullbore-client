@@ -38,6 +38,7 @@ type Config struct {
 	TLSSkipVerify bool   `json:"tls_skip_verify"`
 	DeviceID      string `json:"device_id"`
 	DeviceName    string `json:"device_name"`
+	Debug         bool   `json:"debug"`
 
 	// Tunnels defines persistent tunnels managed by the daemon.
 	Tunnels []TunnelSpec `json:"tunnels,omitempty"`

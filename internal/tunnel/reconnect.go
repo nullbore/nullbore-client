@@ -7,6 +7,7 @@ import (
 
 	"github.com/nullbore/nullbore-client/internal/client"
 	"github.com/nullbore/nullbore-client/internal/config"
+	"github.com/nullbore/nullbore-client/internal/debug"
 )
 
 // RunWithFullReconnect runs the tunnel with full re-registration on disconnect.
@@ -62,7 +63,7 @@ func RunWithFullReconnect(
 			continue // will retry with backoff
 		}
 
-		log.Printf("tunnel re-registered: id=%s slug=%s", t.ID, t.Slug)
+		debug.Printf("tunnel re-registered: id=%s slug=%s", t.ID, t.Slug)
 
 		// Update connector with new tunnel ID
 		connector.mu.Lock()
@@ -71,7 +72,7 @@ func RunWithFullReconnect(
 
 		// Reconnect control WebSocket
 		if err := connector.connect(); err != nil {
-			log.Printf("control reconnect failed: %v", err)
+			debug.Printf("control reconnect failed: %v", err)
 			continue
 		}
 

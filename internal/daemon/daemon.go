@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nullbore/nullbore-client/internal/client"
+	"github.com/nullbore/nullbore-client/internal/debug"
 	"github.com/nullbore/nullbore-client/internal/config"
 	"github.com/nullbore/nullbore-client/internal/tunnel"
 	"github.com/nullbore/nullbore-client/internal/update"
@@ -176,7 +177,7 @@ func (d *Daemon) runDashboard() error {
 	if err := d.dashboardAuth(d.dashClient, d.dashURL); err != nil {
 		return fmt.Errorf("dashboard authentication failed: %w", err)
 	}
-	log.Printf("authenticated with dashboard")
+	debug.Printf("authenticated with dashboard")
 
 	// Initial poll
 	d.pollDashboard(d.dashClient, d.dashURL)
@@ -216,13 +217,13 @@ func (d *Daemon) reportTunnelConnected(name string, port int, tunnelID, publicUR
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := d.dashClient.Do(req)
 	if err != nil {
-		log.Printf("[dashboard] report error: %v", err)
+		debug.Printf("[dashboard] report error: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[dashboard] report failed (%d): %s", resp.StatusCode, string(body))
+		debug.Printf("[dashboard] report failed (%d): %s", resp.StatusCode, string(body))
 	}
 }
 
@@ -257,7 +258,7 @@ func (d *Daemon) dashboardAuth(httpClient *http.Client, dashURL string) error {
 func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 	req, err := http.NewRequest("GET", dashURL+"/api/daemon/configs", nil)
 	if err != nil {
-		log.Printf("[dashboard] request error: %v", err)
+		debug.Printf("[dashboard] request error: %v", err)
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+d.cfg.Token())
@@ -267,20 +268,20 @@ func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("[dashboard] poll error: %v (will retry)", err)
+		debug.Printf("[dashboard] poll error: %v (will retry)", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[dashboard] poll error (%d): %s (will retry)", resp.StatusCode, string(body))
+		debug.Printf("[dashboard] poll error (%d): %s (will retry)", resp.StatusCode, string(body))
 		return
 	}
 
 	var dashCfg DashboardConfig
 	if err := json.NewDecoder(resp.Body).Decode(&dashCfg); err != nil {
-		log.Printf("[dashboard] parse error: %v", err)
+		debug.Printf("[dashboard] parse error: %v", err)
 		return
 	}
 
@@ -308,9 +309,9 @@ func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 	// Reconcile if changed
 	if tunnelsChanged(d.cfg.Tunnels, specs) {
 		if len(specs) == 0 {
-			log.Printf("[dashboard] no active tunnels — waiting for configs")
+			debug.Printf("[dashboard] no active tunnels — waiting for configs")
 		} else {
-			log.Printf("[dashboard] %d active tunnel(s) — reconciling", len(specs))
+			debug.Printf("[dashboard] %d active tunnel(s) — reconciling", len(specs))
 		}
 		d.cfg.Tunnels = specs
 		d.reconcile(specs)

@@ -8,6 +8,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+
+	"github.com/nullbore/nullbore-client/internal/debug"
 	"net/url"
 	"strings"
 	"sync"
@@ -67,7 +69,7 @@ func (c *Connector) connect() error {
 		header.Set("Authorization", "Bearer "+token)
 	}
 
-	log.Printf("connecting control channel to %s", controlURL)
+	debug.Printf("connecting control channel to %s", controlURL)
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
@@ -85,7 +87,7 @@ func (c *Connector) connect() error {
 	c.control = conn
 	c.mu.Unlock()
 
-	log.Printf("control connected: tunnel=%s", c.tunnelID)
+	debug.Printf("control connected: tunnel=%s", c.tunnelID)
 	return nil
 }
 
@@ -205,7 +207,7 @@ func (c *Connector) runOnce() (connected bool, err error) {
 
 		var msg controlMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("invalid control message: %v", err)
+			debug.Printf("invalid control message: %v", err)
 			continue
 		}
 
@@ -213,7 +215,7 @@ func (c *Connector) runOnce() (connected bool, err error) {
 		case "connection":
 			go c.handleConnection(msg.ID)
 		default:
-			log.Printf("unknown control message type: %s", msg.Type)
+			debug.Printf("unknown control message type: %s", msg.Type)
 		}
 	}
 }
@@ -248,7 +250,7 @@ func (c *Connector) handleConnection(connID string) {
 	}
 	dataWS, _, err := dataDialer.Dial(dataURL, nil)
 	if err != nil {
-		log.Printf("data connect error: id=%s err=%v", connID, err)
+		debug.Printf("data connect error: id=%s err=%v", connID, err)
 		return
 	}
 
@@ -256,20 +258,20 @@ func (c *Connector) handleConnection(connID string) {
 	localAddr := fmt.Sprintf("%s:%d", c.localHost, c.localPort)
 	localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
 	if err != nil {
-		log.Printf("local connect error: id=%s addr=%s err=%v", connID, localAddr, err)
+		debug.Printf("local connect error: id=%s addr=%s err=%v", connID, localAddr, err)
 		dataWS.WriteMessage(websocket.BinaryMessage,
 			[]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 22\r\n\r\nlocal service refused\n"))
 		dataWS.Close()
 		return
 	}
 
-	log.Printf("relaying: id=%s → %s", connID, localAddr)
+	debug.Printf("relaying: id=%s → %s", connID, localAddr)
 
 	// Pipe: data WebSocket ↔ local TCP connection
 	dataConn := NewWSNetConn(dataWS)
 	pipe(localConn, dataConn)
 
-	log.Printf("relay closed: id=%s", connID)
+	debug.Printf("relay closed: id=%s", connID)
 }
 
 // WSNetConn wraps a websocket.Conn into a net.Conn for raw byte streaming.
