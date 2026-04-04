@@ -68,6 +68,11 @@ func RunWithFullReconnect(
 		}
 		log.Printf("re-registering tunnel...")
 		t, err := apiClient.CreateTunnel(port, reconnectName, ttl)
+		if err != nil && reconnectName != name {
+			// Reclaim failed (tunnel expired or name rejected) — fall back to original name (or empty)
+			debug.Printf("reclaim failed, retrying without slug: %v", err)
+			t, err = apiClient.CreateTunnel(port, name, ttl)
+		}
 		if err != nil {
 			log.Printf("tunnel re-registration failed: %v", err)
 			continue // will retry with backoff

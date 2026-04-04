@@ -8,6 +8,7 @@ import (
 
 	"github.com/nullbore/nullbore-client/internal/client"
 	"github.com/nullbore/nullbore-client/internal/config"
+	"github.com/nullbore/nullbore-client/internal/debug"
 )
 
 // TunnelSpec defines a single tunnel to open.
@@ -179,6 +180,11 @@ func (m *Manager) runTunnel(at *ActiveTunnel) error {
 			src = "cli"
 		}
 		t, err := m.apiClient.CreateTunnelWithSource(at.Spec.Port, reconnectName, at.Spec.TTL, src)
+		if err != nil && reconnectName != at.Spec.Name {
+			// Reclaim failed (tunnel expired or name rejected) — fall back to no name
+			debug.Printf("[%s] reclaim failed, retrying without name: %v", at.Slug, err)
+			t, err = m.apiClient.CreateTunnelWithSource(at.Spec.Port, at.Spec.Name, at.Spec.TTL, src)
+		}
 		if err != nil {
 			log.Printf("[%s] re-registration failed: %v", at.Slug, err)
 			continue
