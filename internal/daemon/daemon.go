@@ -335,6 +335,21 @@ func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 		d.cfg.Tunnels = specs
 		d.reconcile(specs)
 	}
+
+	// Re-report active tunnels so dashboard stays in sync after restarts
+	d.reportActiveTunnels()
+}
+
+// reportActiveTunnels sends the current state of all active tunnels to the dashboard.
+func (d *Daemon) reportActiveTunnels() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for key, mgr := range d.managers {
+		spec := d.specs[key]
+		for _, at := range mgr.Tunnels() {
+			d.reportTunnelConnected(spec.Name, spec.Port, at.TunnelID, at.PublicURL)
+		}
+	}
 }
 
 // coreConfigChanged returns true if server, api_key, dashboard, or tls settings changed.
