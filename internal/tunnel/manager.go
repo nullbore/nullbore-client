@@ -147,6 +147,12 @@ func (m *Manager) runTunnel(at *ActiveTunnel) error {
 			return nil
 		}
 
+		// TTL expiry — don't reconnect
+		if err == ErrTunnelExpired {
+			log.Printf("[%s] tunnel expired — closing", at.Slug)
+			return nil
+		}
+
 		if connected {
 			backoff.Reset()
 			if err != nil {

@@ -104,6 +104,10 @@ func (c *Connector) Connect() error {
 	return c.connect()
 }
 
+// ErrTunnelExpired is returned when the server closes a tunnel due to TTL expiry.
+// The client should not reconnect in this case.
+var ErrTunnelExpired = fmt.Errorf("tunnel expired (TTL reached)")
+
 // RunWithReconnect runs the control loop with automatic reconnection.
 // It will keep trying to reconnect until Close() is called or maxRetries is exceeded.
 // Set maxRetries to -1 for unlimited retries.
@@ -127,6 +131,12 @@ func (c *Connector) RunWithReconnect(maxRetries int) error {
 		c.mu.Unlock()
 		if closed {
 			return nil
+		}
+
+		// TTL expiry — server sent a clean close, don't reconnect
+		if err == ErrTunnelExpired {
+			log.Printf("tunnel expired — not reconnecting")
+			return ErrTunnelExpired
 		}
 
 		// If we were connected for >10s, it was a real session — reset backoff
@@ -207,6 +217,10 @@ func (c *Connector) runOnce() (connected bool, err error) {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			wasConnected := time.Since(start) > 10*time.Second
+			// Check if this is a normal closure (TTL expiry sends CloseNormalClosure)
+			if closeErr, ok := err.(*websocket.CloseError); ok && closeErr.Code == websocket.CloseNormalClosure {
+				return wasConnected, ErrTunnelExpired
+			}
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				return wasConnected, fmt.Errorf("control read: %w", err)
 			}
