@@ -236,11 +236,14 @@ func (d *Daemon) reportTunnelConnected(name string, port int, tunnelID, publicUR
 
 // dashboardAuth validates the API key against the dashboard.
 func (d *Daemon) dashboardAuth(httpClient *http.Client, dashURL string) error {
-	req, err := http.NewRequest("GET", dashURL+"/api/daemon/configs", nil)
+	url := dashURL + "/api/daemon/configs"
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+d.cfg.Token())
+	token := d.cfg.Token()
+	debug.Printf("[dashboard] auth url=%s key_prefix=%s key_len=%d", url, safePrefix(token), len(token))
+	req.Header.Set("Authorization", "Bearer "+token)
 	if hostname, _ := os.Hostname(); hostname != "" {
 		req.Header.Set("X-NullBore-Device-Hostname", hostname)
 	}
@@ -254,8 +257,10 @@ func (d *Daemon) dashboardAuth(httpClient *http.Client, dashURL string) error {
 		resp.Body.Close()
 	}()
 
-	if resp.StatusCode == 401 || resp.StatusCode == 302 {
-		return fmt.Errorf("invalid API key")
+	debug.Printf("[dashboard] auth response: status=%d content-type=%s", resp.StatusCode, resp.Header.Get("Content-Type"))
+
+	if resp.StatusCode == 401 || resp.StatusCode == 302 || resp.StatusCode == 303 {
+		return fmt.Errorf("invalid API key (status %d)", resp.StatusCode)
 	}
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -471,4 +476,11 @@ func (d *Daemon) ActiveCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return len(d.managers)
+}
+
+func safePrefix(key string) string {
+	if len(key) > 12 {
+		return key[:12] + "..."
+	}
+	return key
 }
