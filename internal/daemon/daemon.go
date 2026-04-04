@@ -167,7 +167,13 @@ func (d *Daemon) runDashboard() error {
 	log.Printf("dashboard: %s/dashboard", d.dashURL)
 
 	// Authenticate with dashboard
-	d.dashClient = &http.Client{Timeout: 15 * time.Second}
+	// Don't follow redirects — auth failures return 302 → /login
+	d.dashClient = &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	if d.cfg.InsecureSkipVerify() {
 		d.dashClient.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -243,9 +249,12 @@ func (d *Daemon) dashboardAuth(httpClient *http.Client, dashURL string) error {
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
-	if resp.StatusCode == 401 {
+	if resp.StatusCode == 401 || resp.StatusCode == 302 {
 		return fmt.Errorf("invalid API key")
 	}
 	if resp.StatusCode != 200 {
@@ -272,11 +281,15 @@ func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 		debug.Printf("[dashboard] poll error: %v (will retry)", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		debug.Printf("[dashboard] poll error (%d): %s (will retry)", resp.StatusCode, string(body))
+		log.Printf("[dashboard] auth failed (%d) — check API key (will retry)", resp.StatusCode)
+		debug.Printf("[dashboard] response body: %s", string(body))
 		return
 	}
 
