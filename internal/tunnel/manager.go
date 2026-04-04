@@ -13,11 +13,13 @@ import (
 
 // TunnelSpec defines a single tunnel to open.
 type TunnelSpec struct {
-	Port   int
-	Host   string // target host (default "", meaning localhost)
-	Name   string
-	TTL    string
-	Source string // "cli" or "daemon"
+	Port     int
+	Host     string // target host (default "", meaning localhost)
+	Name     string
+	TTL      string
+	Source   string // "cli" or "daemon"
+	AuthUser string // basic auth username (optional)
+	AuthPass string // basic auth password (optional)
 }
 
 // ActiveTunnel tracks a running tunnel.
@@ -53,7 +55,7 @@ func (m *Manager) OpenTunnel(spec TunnelSpec) (*ActiveTunnel, error) {
 	if src == "" {
 		src = "cli"
 	}
-	t, err := m.apiClient.CreateTunnelWithSource(spec.Port, spec.Name, spec.TTL, src)
+	t, err := m.apiClient.CreateTunnelFull(spec.Port, spec.Name, spec.TTL, src, spec.AuthUser, spec.AuthPass)
 	if err != nil {
 		return nil, fmt.Errorf("creating tunnel for port %d: %w", spec.Port, err)
 	}
@@ -179,11 +181,11 @@ func (m *Manager) runTunnel(at *ActiveTunnel) error {
 		if src == "" {
 			src = "cli"
 		}
-		t, err := m.apiClient.CreateTunnelWithSource(at.Spec.Port, reconnectName, at.Spec.TTL, src)
+		t, err := m.apiClient.CreateTunnelFull(at.Spec.Port, reconnectName, at.Spec.TTL, src, at.Spec.AuthUser, at.Spec.AuthPass)
 		if err != nil && reconnectName != at.Spec.Name {
 			// Reclaim failed (tunnel expired or name rejected) — fall back to no name
 			debug.Printf("[%s] reclaim failed, retrying without name: %v", at.Slug, err)
-			t, err = m.apiClient.CreateTunnelWithSource(at.Spec.Port, at.Spec.Name, at.Spec.TTL, src)
+			t, err = m.apiClient.CreateTunnelFull(at.Spec.Port, at.Spec.Name, at.Spec.TTL, src, at.Spec.AuthUser, at.Spec.AuthPass)
 		}
 		if err != nil {
 			log.Printf("[%s] re-registration failed: %v", at.Slug, err)

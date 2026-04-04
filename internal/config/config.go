@@ -27,6 +27,7 @@ type TunnelSpec struct {
 	Host      string `json:"host,omitempty"` // local target host (default: localhost)
 	TTL       string `json:"ttl,omitempty"`
 	IdleTTL   bool   `json:"idle_ttl,omitempty"`
+	Auth      string `json:"auth,omitempty"` // basic auth "user:pass" (optional)
 }
 
 // Config holds client configuration.
@@ -222,6 +223,8 @@ func LoadFrom(path string) (*Config, error) {
 				currentTunnel.TTL = val
 			case "idle_ttl":
 				currentTunnel.IdleTTL = val == "true" || val == "1"
+			case "auth":
+				currentTunnel.Auth = val
 			default:
 				parsed = false
 			}

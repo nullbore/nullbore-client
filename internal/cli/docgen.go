@@ -29,6 +29,7 @@ func allCommands() []cmdDoc {
 	openFlags.String("name", "", "Tunnel name / custom subdomain (Hobby+ plans)")
 	openFlags.String("ttl", "1h", "Time-to-live (e.g. 30m, 2h, 24h)")
 	openFlags.String("host", "localhost", "Target host (for Docker/remote services)")
+	openFlags.String("auth", "", "Basic auth for tunnel access (user:pass)")
 
 	// --- requests ---
 	reqFlags := flag.NewFlagSet("requests", flag.ContinueOnError)
@@ -60,6 +61,7 @@ func allCommands() []cmdDoc {
 				"nullbore open --port 3000 --ttl 30m         # 30-minute TTL",
 				"nullbore open -p 3000:api -p 8080:web       # multiple named tunnels",
 				"nullbore open 3000 8080 5432                # multiple tunnels (positional)",
+				"nullbore open --port 3000 --auth admin:s3cret  # with basic auth",
 			},
 			RequiresKey: true,
 		},
@@ -258,6 +260,7 @@ func GenerateDocs() string {
 	b.WriteString("[[tunnels]]\n")
 	b.WriteString("name = \"api\"\n")
 	b.WriteString("port = 3000\n")
+	b.WriteString("# auth = \"user:pass\"  # optional: require basic auth on this tunnel\n")
 	b.WriteString("```\n\n")
 	b.WriteString("Edit the file directly — there is no `config set` command.\n\n")
 

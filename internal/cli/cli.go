@@ -146,6 +146,7 @@ func cmdOpen(cfg *config.Config, args []string) error {
 	singlePort := fs.Int("port", 0, "Local port to expose (single tunnel)")
 	name := fs.String("name", "", "Tunnel name (single tunnel mode)")
 	ttl := fs.String("ttl", cfg.DefaultTTL, "Time-to-live (e.g. 30m, 2h)")
+	authFlag := fs.String("auth", "", "Basic auth for tunnel access (user:pass)")
 
 	var ports portList
 	fs.Var(&ports, "p", "Port to expose, repeatable. Format: PORT or PORT:NAME (e.g. -p 3000:api -p 8080:web)")
@@ -170,10 +171,21 @@ func cmdOpen(cfg *config.Config, args []string) error {
 	}
 
 	// Set TTL on all specs
-	// Named tunnels are a Hobby+ feature — don't auto-generate names.
-	// Users who want a named URL use --name explicitly.
+	// Set TTL and optional auth on all specs
+	var authUser, authPass string
+	if *authFlag != "" {
+		parts := strings.SplitN(*authFlag, ":", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("--auth must be in user:pass format")
+		}
+		authUser, authPass = parts[0], parts[1]
+	}
 	for i := range ports {
 		ports[i].TTL = *ttl
+		if authUser != "" {
+			ports[i].AuthUser = authUser
+			ports[i].AuthPass = authPass
+		}
 	}
 
 	c := client.New(cfg)

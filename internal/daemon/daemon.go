@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -404,12 +405,22 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 			tunnelName = s.Name
 		}
 
+		// Parse auth from config (user:pass format)
+		var authUser, authPass string
+		if s.Auth != "" {
+			if parts := strings.SplitN(s.Auth, ":", 2); len(parts) == 2 {
+				authUser, authPass = parts[0], parts[1]
+			}
+		}
+
 		spec := tunnel.TunnelSpec{
-			Port:   s.Port,
-			Host:   s.Host,
-			Name:   tunnelName,
-			TTL:    ttl,
-			Source: "daemon",
+			Port:     s.Port,
+			Host:     s.Host,
+			Name:     tunnelName,
+			TTL:      ttl,
+			Source:   "daemon",
+			AuthUser: authUser,
+			AuthPass: authPass,
 		}
 
 		at, err := mgr.OpenTunnel(spec)

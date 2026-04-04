@@ -57,11 +57,16 @@ func New(cfg *config.Config) *Client {
 
 // CreateTunnel registers a new tunnel with the server.
 func (c *Client) CreateTunnel(port int, name, ttl string) (*Tunnel, error) {
-	return c.CreateTunnelWithSource(port, name, ttl, "cli")
+	return c.CreateTunnelFull(port, name, ttl, "cli", "", "")
 }
 
 // CreateTunnelWithSource registers a tunnel, tagging it with a source ("cli" or "daemon").
 func (c *Client) CreateTunnelWithSource(port int, name, ttl, source string) (*Tunnel, error) {
+	return c.CreateTunnelFull(port, name, ttl, source, "", "")
+}
+
+// CreateTunnelFull registers a tunnel with all options including basic auth.
+func (c *Client) CreateTunnelFull(port int, name, ttl, source, authUser, authPass string) (*Tunnel, error) {
 	deviceName := c.cfg.DeviceName
 	if deviceName == "" {
 		deviceName, _ = os.Hostname()
@@ -76,6 +81,10 @@ func (c *Client) CreateTunnelWithSource(port int, name, ttl, source string) (*Tu
 	}
 	if ttl != "" {
 		body["ttl"] = ttl
+	}
+	if authUser != "" && authPass != "" {
+		body["auth_user"] = authUser
+		body["auth_pass"] = authPass
 	}
 
 	var t Tunnel
