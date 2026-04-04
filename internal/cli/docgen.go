@@ -246,12 +246,18 @@ func GenerateDocs() string {
 
 	// Config file
 	b.WriteString("## Config File\n\n")
-	b.WriteString("The client reads `~/.nullbore/config.toml` on startup.\n\n")
+	b.WriteString("The client reads `~/.config/nullbore/config.toml` on startup.\n\n")
+	b.WriteString("> Legacy path `~/.nullbore/config.toml` is still supported.\n\n")
 	b.WriteString("```toml\n")
-	b.WriteString("# ~/.nullbore/config.toml\n\n")
+	b.WriteString("# ~/.config/nullbore/config.toml\n\n")
 	b.WriteString("server = \"https://tunnel.nullbore.com\"\n")
 	b.WriteString("api_key = \"nbk_your_key_here\"\n")
 	b.WriteString("default_ttl = \"1h\"\n")
+	b.WriteString("debug = false\n\n")
+	b.WriteString("# Persistent tunnels (managed by daemon)\n")
+	b.WriteString("[[tunnels]]\n")
+	b.WriteString("name = \"api\"\n")
+	b.WriteString("port = 3000\n")
 	b.WriteString("```\n\n")
 	b.WriteString("Edit the file directly — there is no `config set` command.\n\n")
 
