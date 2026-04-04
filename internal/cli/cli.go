@@ -151,7 +151,25 @@ func cmdOpen(cfg *config.Config, args []string) error {
 	var ports portList
 	fs.Var(&ports, "p", "Port to expose, repeatable. Format: PORT or PORT:NAME (e.g. -p 3000:api -p 8080:web)")
 
-	fs.Parse(args)
+	// Reorder args: move positional port numbers before flags so flag.Parse sees all flags.
+	// e.g. "8000 --ttl 30s" → "--ttl 30s 8000"
+	var reordered []string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			reordered = append(reordered, args[i])
+			// If it's not a bool-style flag, grab the next arg as its value
+			if i+1 < len(args) && !strings.Contains(args[i], "=") {
+				i++
+				reordered = append(reordered, args[i])
+			}
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+	reordered = append(reordered, positional...)
+
+	fs.Parse(reordered)
 
 	// Also accept positional args as ports (e.g. `nullbore open 3000 8080`)
 	for _, arg := range fs.Args() {
