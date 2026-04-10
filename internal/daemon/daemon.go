@@ -33,6 +33,7 @@ type Daemon struct {
 	dashMode   bool
 	dashURL    string
 	dashClient *http.Client
+	dashToken  string // JWT session token from /api/auth/token exchange
 
 	// Version for update checks
 	version string
@@ -180,11 +181,16 @@ func (d *Daemon) runDashboard() error {
 		}
 	}
 
-	// Validate auth
-	if err := d.dashboardAuth(d.dashClient, d.dashURL); err != nil {
-		return fmt.Errorf("dashboard authentication failed: %w", err)
+	// Exchange API key for a session JWT. The raw API key authenticates
+	// successfully (dashboardAuth → GET /api/daemon/configs returns 200)
+	// but /api/daemon/configs requires a session JWT to know which user's
+	// configs to return. Without this exchange, pollDashboard always gets
+	// an empty config list because the dashboard can't resolve a user from
+	// a raw API key on the configs endpoint.
+	if err := d.exchangeToken(d.dashClient, d.dashURL); err != nil {
+		return fmt.Errorf("dashboard token exchange failed: %w", err)
 	}
-	debug.Printf("authenticated with dashboard")
+	debug.Printf("authenticated with dashboard (session token obtained)")
 
 	// Initial poll
 	d.pollDashboard(d.dashClient, d.dashURL)
@@ -220,7 +226,7 @@ func (d *Daemon) reportTunnelConnected(name string, port int, tunnelID, publicUR
 	if err != nil {
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+d.cfg.Token())
+	req.Header.Set("Authorization", "Bearer "+d.dashboardBearerToken())
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := d.dashClient.Do(req)
 	if err != nil {
@@ -234,7 +240,71 @@ func (d *Daemon) reportTunnelConnected(name string, port int, tunnelID, publicUR
 	}
 }
 
-// dashboardAuth validates the API key against the dashboard.
+// exchangeToken exchanges the raw API key for a JWT session token via
+// POST /api/auth/token. The session token is then used for all subsequent
+// dashboard API calls. Without this exchange, /api/daemon/configs returns
+// an empty list because it can't resolve the user from a raw API key.
+//
+// If the exchange fails, it falls back to the raw API key — some dashboard
+// deployments (e.g. older self-hosted) may not have /api/auth/token and
+// accept raw keys on all endpoints.
+func (d *Daemon) exchangeToken(httpClient *http.Client, dashURL string) error {
+	apiKey := d.cfg.Token()
+	debug.Printf("[dashboard] exchanging API key for session token (key_prefix=%s)", safePrefix(apiKey))
+
+	body := fmt.Sprintf(`{"api_key":%q}`, apiKey)
+	req, err := http.NewRequest("POST", dashURL+"/api/auth/token", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		debug.Printf("[dashboard] token exchange connection failed: %v (falling back to raw key)", err)
+		d.dashToken = apiKey
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		respBody, _ := io.ReadAll(resp.Body)
+		// 404 = endpoint not supported (old dashboard); 401 = bad key
+		if resp.StatusCode == 404 {
+			debug.Printf("[dashboard] /api/auth/token not found — using raw API key (older dashboard?)")
+			d.dashToken = apiKey
+			return nil
+		}
+		return fmt.Errorf("token exchange failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.Token == "" {
+		debug.Printf("[dashboard] token exchange returned invalid response — using raw key")
+		d.dashToken = apiKey
+		return nil
+	}
+
+	d.dashToken = result.Token
+	debug.Printf("[dashboard] session token obtained (len=%d)", len(d.dashToken))
+	return nil
+}
+
+// dashboardBearerToken returns the token to use as Bearer in dashboard API calls.
+// Prefers the exchanged session JWT; falls back to the raw API key.
+func (d *Daemon) dashboardBearerToken() string {
+	if d.dashToken != "" {
+		return d.dashToken
+	}
+	return d.cfg.Token()
+}
+
+// dashboardAuth validates connectivity + auth against the dashboard by
+// hitting /api/daemon/configs. We don't parse the response yet — that's
+// pollDashboard's job — we just confirm the server is reachable and
+// doesn't reject us.
 func (d *Daemon) dashboardAuth(httpClient *http.Client, dashURL string) error {
 	url := dashURL + "/api/daemon/configs"
 	req, err := http.NewRequest("GET", url, nil)
@@ -276,7 +346,7 @@ func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 		debug.Printf("[dashboard] request error: %v", err)
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+d.cfg.Token())
+	req.Header.Set("Authorization", "Bearer "+d.dashboardBearerToken())
 	if hostname, _ := os.Hostname(); hostname != "" {
 		req.Header.Set("X-NullBore-Device-Hostname", hostname)
 	}
@@ -291,6 +361,14 @@ func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 		resp.Body.Close()
 	}()
 
+	if resp.StatusCode == 401 || resp.StatusCode == 302 || resp.StatusCode == 303 {
+		// Session token may have expired — re-exchange.
+		debug.Printf("[dashboard] poll got %d — re-exchanging token", resp.StatusCode)
+		if err := d.exchangeToken(httpClient, dashURL); err != nil {
+			log.Printf("[dashboard] token re-exchange failed: %v (will retry)", err)
+		}
+		return
+	}
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		log.Printf("[dashboard] auth failed (%d) — check API key (will retry)", resp.StatusCode)
@@ -432,9 +510,18 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 
 		mgr := tunnel.NewManager(d.cfg, d.client)
 
-		// Prefer subdomain for URL routing; fall back to config name for display
+		// In local-config mode (config.toml), s.Name is the user's intended
+		// tunnel slug — they explicitly set it and want to claim that name
+		// on the server.
+		//
+		// In dashboard mode, s.Subdomain is the tunnel slug (set when the
+		// user has a namespace). s.Name is just a display label from the
+		// dashboard UI. An empty subdomain means the user hasn't claimed a
+		// namespace, so we must NOT pass a name to the server — the server
+		// would reject it as "named tunnels require account subdomain
+		// (Hobby+)". Let the server generate a random slug instead.
 		tunnelName := s.Subdomain
-		if tunnelName == "" {
+		if tunnelName == "" && !d.dashMode {
 			tunnelName = s.Name
 		}
 
