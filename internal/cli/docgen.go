@@ -26,7 +26,7 @@ func allCommands() []cmdDoc {
 	// --- open ---
 	openFlags := flag.NewFlagSet("open", flag.ContinueOnError)
 	openFlags.Int("port", 0, "Local port to expose (single tunnel)")
-	openFlags.String("name", "", "Tunnel name / custom subdomain (Hobby+ plans)")
+	openFlags.String("name", "", "Tunnel name / custom subdomain (Dev+ plans)")
 	openFlags.String("ttl", "1h", "Time-to-live (e.g. 30m, 2h, 24h)")
 	openFlags.String("host", "localhost", "Target host (for Docker/remote services)")
 	openFlags.String("auth", "", "Basic auth for tunnel access (user:pass)")

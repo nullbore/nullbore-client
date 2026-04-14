@@ -519,7 +519,7 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 		// dashboard UI. An empty subdomain means the user hasn't claimed a
 		// namespace, so we must NOT pass a name to the server — the server
 		// would reject it as "named tunnels require account subdomain
-		// (Hobby+)". Let the server generate a random slug instead.
+		// (Dev+)". Let the server generate a random slug instead.
 		tunnelName := s.Subdomain
 		if tunnelName == "" && !d.dashMode {
 			tunnelName = s.Name
