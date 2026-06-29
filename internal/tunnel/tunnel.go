@@ -276,8 +276,8 @@ func (c *Connector) handleConnection(connID string) {
 		return
 	}
 
-	// Connect to local service
-	localAddr := fmt.Sprintf("%s:%d", c.localHost, c.localPort)
+	// Connect to local service (JoinHostPort handles IPv6 literals correctly)
+	localAddr := net.JoinHostPort(c.localHost, fmt.Sprintf("%d", c.localPort))
 	localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
 	if err != nil {
 		debug.Printf("local connect error: id=%s addr=%s err=%v", connID, localAddr, err)

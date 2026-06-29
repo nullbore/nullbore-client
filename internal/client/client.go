@@ -8,10 +8,38 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/nullbore/nullbore-client/internal/config"
 )
+
+// SupportedAPIVersion is the server API major version this client speaks. It
+// matches the URL path prefix used for requests (/v1). The server advertises
+// its own version via the X-NullBore-API response header; if the server reports
+// a newer major version, the client warns the user to upgrade.
+const SupportedAPIVersion = "1"
+
+// Version is the client build version, set by the CLI at startup (ldflags-driven).
+// Used in the User-Agent so the server can observe which client versions are in
+// the field — important for planning deprecations.
+var Version = "dev"
+
+// apiCompatWarning returns an upgrade warning if the server's advertised API
+// major version is newer than this client supports. Empty = compatible (equal,
+// older, or unparseable/unknown — never warn spuriously).
+func apiCompatWarning(serverAPI string) string {
+	if serverAPI == "" || serverAPI == SupportedAPIVersion {
+		return ""
+	}
+	sv, err1 := strconv.Atoi(serverAPI)
+	cv, err2 := strconv.Atoi(SupportedAPIVersion)
+	if err1 != nil || err2 != nil || sv <= cv {
+		return ""
+	}
+	return fmt.Sprintf("This NullBore server uses API v%s, but your client speaks v%s. "+
+		"Some features may not work — update with: nullbore update", serverAPI, SupportedAPIVersion)
+}
 
 // Client communicates with the NullBore server REST API.
 type Client struct {
@@ -189,6 +217,7 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	if c.takeover {
 		req.Header.Set("X-NullBore-Device-Takeover", "true")
 	}
+	req.Header.Set("User-Agent", "nullbore-client/"+Version+" (api/"+SupportedAPIVersion+")")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -198,6 +227,11 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 
 	// Check for device warning
 	if warning := resp.Header.Get("X-NullBore-Device-Warning"); warning != "" {
+		fmt.Fprintf(os.Stderr, "\n⚠️  %s\n\n", warning)
+	}
+
+	// Warn if the server's API major version is newer than this client supports.
+	if warning := apiCompatWarning(resp.Header.Get("X-NullBore-API")); warning != "" {
 		fmt.Fprintf(os.Stderr, "\n⚠️  %s\n\n", warning)
 	}
 

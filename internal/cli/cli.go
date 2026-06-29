@@ -25,6 +25,10 @@ import (
 var version = "0.1.0-dev"
 
 func Run(args []string) error {
+	// Propagate the build version to the API client so it appears in the
+	// User-Agent sent to the server.
+	client.Version = version
+
 	if len(args) == 0 {
 		return printUsage()
 	}
