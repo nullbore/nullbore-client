@@ -191,6 +191,33 @@ port = 8080
 	}
 }
 
+func TestTunnelModeParsing(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	os.WriteFile(cfgPath, []byte(`
+[[tunnels]]
+port = 8443
+name = "secure"
+mode = "tls-passthrough"
+
+[[tunnels]]
+port = 3000
+`), 0600)
+
+	cfg, err := LoadFrom(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Tunnels) != 2 {
+		t.Fatalf("tunnels = %d, want 2", len(cfg.Tunnels))
+	}
+	if cfg.Tunnels[0].Mode != "tls-passthrough" {
+		t.Errorf("tunnel[0].Mode = %q, want tls-passthrough", cfg.Tunnels[0].Mode)
+	}
+	if cfg.Tunnels[1].Mode != "" {
+		t.Errorf("tunnel[1].Mode = %q, want empty (relay default)", cfg.Tunnels[1].Mode)
+	}
+}
+
 func TestNoTunnels(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.toml")

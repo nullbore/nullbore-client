@@ -65,3 +65,14 @@ func TestNewDaemon(t *testing.T) {
 		t.Errorf("active = %d, want 0 (not started)", d.ActiveCount())
 	}
 }
+
+func TestTunnelsChangedMode(t *testing.T) {
+	a := []config.TunnelSpec{{Port: 8443, Name: "secure"}}
+	b := []config.TunnelSpec{{Port: 8443, Name: "secure", Mode: "tls-passthrough"}}
+	if !tunnelsChanged(a, b) {
+		t.Error("mode change should be detected so the tunnel is re-created with the new mode")
+	}
+	if tunnelsChanged(b, []config.TunnelSpec{{Port: 8443, Name: "secure", Mode: "tls-passthrough"}}) {
+		t.Error("identical mode should not be changed")
+	}
+}

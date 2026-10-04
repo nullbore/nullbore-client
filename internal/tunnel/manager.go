@@ -20,6 +20,27 @@ type TunnelSpec struct {
 	Source   string // "cli" or "daemon"
 	AuthUser string // basic auth username (optional)
 	AuthPass string // basic auth password (optional)
+	Mode     string // "" (relay) or client.ModeTLSPassthrough
+}
+
+// createOptions converts a spec into API create options. name overrides
+// spec.Name (used on reconnect to reclaim the previous slug). Every create —
+// initial open and each re-registration — goes through here, so the mode
+// (and auth) are always re-sent.
+func createOptions(spec TunnelSpec, name string) client.TunnelOptions {
+	src := spec.Source
+	if src == "" {
+		src = "cli"
+	}
+	return client.TunnelOptions{
+		Port:     spec.Port,
+		Name:     name,
+		TTL:      spec.TTL,
+		Source:   src,
+		AuthUser: spec.AuthUser,
+		AuthPass: spec.AuthPass,
+		Mode:     spec.Mode,
+	}
 }
 
 // ActiveTunnel tracks a running tunnel.
@@ -51,11 +72,7 @@ func NewManager(cfg *config.Config, apiClient *client.Client) *Manager {
 
 // OpenTunnel creates and connects a single tunnel, adding it to the manager.
 func (m *Manager) OpenTunnel(spec TunnelSpec) (*ActiveTunnel, error) {
-	src := spec.Source
-	if src == "" {
-		src = "cli"
-	}
-	t, err := m.apiClient.CreateTunnelFull(spec.Port, spec.Name, spec.TTL, src, spec.AuthUser, spec.AuthPass)
+	t, err := m.apiClient.CreateTunnelWithOptions(createOptions(spec, spec.Name))
 	if err != nil {
 		return nil, fmt.Errorf("creating tunnel for port %d: %w", spec.Port, err)
 	}
@@ -183,15 +200,11 @@ func (m *Manager) runTunnel(at *ActiveTunnel) error {
 			reconnectName = at.Slug
 		}
 		log.Printf("[%s] re-registering tunnel...", at.Slug)
-		src := at.Spec.Source
-		if src == "" {
-			src = "cli"
-		}
-		t, err := m.apiClient.CreateTunnelFull(at.Spec.Port, reconnectName, at.Spec.TTL, src, at.Spec.AuthUser, at.Spec.AuthPass)
+		t, err := m.apiClient.CreateTunnelWithOptions(createOptions(at.Spec, reconnectName))
 		if err != nil && reconnectName != at.Spec.Name {
 			// Reclaim failed (tunnel expired or name rejected) — fall back to no name
 			debug.Printf("[%s] reclaim failed, retrying without name: %v", at.Slug, err)
-			t, err = m.apiClient.CreateTunnelFull(at.Spec.Port, at.Spec.Name, at.Spec.TTL, src, at.Spec.AuthUser, at.Spec.AuthPass)
+			t, err = m.apiClient.CreateTunnelWithOptions(createOptions(at.Spec, at.Spec.Name))
 		}
 		if err != nil {
 			log.Printf("[%s] re-registration failed: %v", at.Slug, err)

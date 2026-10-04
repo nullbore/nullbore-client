@@ -17,6 +17,8 @@ services:
 
       # --- Option 1: Static tunnels ---
       # Format: host:port:slug,host:port:slug,...
+      # Append +tls-passthrough to an entry for end-to-end TLS (the service
+      # must serve TLS itself; paid plans): caddy:443:secure+tls-passthrough
       NULLBORE_TUNNELS: gramps:5000:my-gramps
 
       # --- Option 2: Dashboard-driven ---

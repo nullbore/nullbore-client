@@ -30,6 +30,7 @@ func allCommands() []cmdDoc {
 	openFlags.String("ttl", "1h", "Time-to-live (e.g. 30m, 2h, 24h)")
 	openFlags.String("host", "localhost", "Target host (for Docker/remote services)")
 	openFlags.String("auth", "", "Basic auth for tunnel access (user:pass)")
+	openFlags.Bool("tls-passthrough", false, tlsPassthroughHelp)
 
 	// --- requests ---
 	reqFlags := flag.NewFlagSet("requests", flag.ContinueOnError)
@@ -50,7 +51,11 @@ func allCommands() []cmdDoc {
 				"nullbore open <port> [<port> ...]",
 			},
 			Description: "Creates a tunnel on the server and relays traffic from the public URL to your local port. " +
-				"Stays open until the TTL expires or you press Ctrl+C.",
+				"Stays open until the TTL expires or you press Ctrl+C.\n\n" +
+				"With `--tls-passthrough` the relay forwards raw TLS bytes without decrypting them, so traffic is " +
+				"encrypted end-to-end. Your local service must serve TLS itself and visitors see its certificate. " +
+				"The relay cannot inspect requests or add basic auth, so " +
+				"`--auth` cannot be combined with it. Available on paid plans only.",
 			Flags: openFlags,
 			CustomFlags: "  -p <port> or <port>:<name>    Repeatable. Open multiple tunnels.\n" +
 				"                                Format: PORT or PORT:NAME\n" +
@@ -62,6 +67,7 @@ func allCommands() []cmdDoc {
 				"nullbore open -p 3000:api -p 8080:web       # multiple named tunnels",
 				"nullbore open 3000 8080 5432                # multiple tunnels (positional)",
 				"nullbore open --port 3000 --auth admin:s3cret  # with basic auth",
+				"nullbore open --port 8443 --tls-passthrough    # end-to-end TLS (local service serves TLS)",
 			},
 			RequiresKey: true,
 		},
@@ -104,7 +110,9 @@ func allCommands() []cmdDoc {
 				"Tunnels activate/deactivate remotely without restarting the daemon.\n\n" +
 				"For static/headless mode (Docker), set `NULLBORE_TUNNELS` instead:\n\n" +
 				"    NULLBORE_TUNNELS=host:port:slug,host:port:slug,...\n\n" +
-				"Example: `NULLBORE_TUNNELS=webapp:3000:my-app,db:5432:my-db`",
+				"Example: `NULLBORE_TUNNELS=webapp:3000:my-app,db:5432:my-db`\n\n" +
+				"Append `+tls-passthrough` to an entry for end-to-end TLS passthrough (the service must serve TLS; paid plans): " +
+				"`NULLBORE_TUNNELS=caddy:443:secure+tls-passthrough,webapp:3000:my-app`",
 			RequiresKey: true,
 		},
 		{
@@ -143,7 +151,7 @@ func envVarDocs() []struct {
 		{"NULLBORE_API_KEY", "API key for authentication", ""},
 		{"NULLBORE_DASHBOARD", "Dashboard URL (for daemon mode)", "https://nullbore.com"},
 		{"NULLBORE_TLS_SKIP_VERIFY", "Skip TLS certificate verification (set to 1 or true)", ""},
-		{"NULLBORE_TUNNELS", "Static tunnel list for Docker/headless mode (format: host:port:slug,...)", ""},
+		{"NULLBORE_TUNNELS", "Static tunnel list for Docker/headless mode (format: host:port:slug,...; append +tls-passthrough to an entry for end-to-end TLS)", ""},
 		{"NULLBORE_INSTALL_DIR", "Override install directory for install.sh", "~/.local/bin"},
 		{"NULLBORE_VERSION", "Pin a specific version for install.sh", ""},
 	}
@@ -261,6 +269,7 @@ func GenerateDocs() string {
 	b.WriteString("name = \"api\"\n")
 	b.WriteString("port = 3000\n")
 	b.WriteString("# auth = \"user:pass\"  # optional: require basic auth on this tunnel\n")
+	b.WriteString("# mode = \"tls-passthrough\"  # optional: end-to-end TLS (local service must serve TLS; not with auth)\n")
 	b.WriteString("```\n\n")
 	b.WriteString("Edit the file directly — there is no `config set` command.\n\n")
 

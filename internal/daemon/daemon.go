@@ -387,7 +387,11 @@ func (d *Daemon) pollDashboard(httpClient *http.Client, dashURL string) {
 		d.cfg.Server = dashCfg.TunnelServer
 	}
 
-	// Convert active dashboard configs to TunnelSpecs
+	// Convert active dashboard configs to TunnelSpecs.
+	// Note: dashboard configs carry no tunnel mode today, so dashboard-managed
+	// tunnels are always relay mode. If the dashboard gains a "mode" field,
+	// map it onto TunnelSpec.Mode here — reconcile and the manager already
+	// propagate it through every (re)creation.
 	var specs []config.TunnelSpec
 	for _, c := range dashCfg.Configs {
 		if !c.Active {
@@ -447,7 +451,8 @@ func tunnelsChanged(old, new []config.TunnelSpec) bool {
 	for i := range old {
 		if old[i].Port != new[i].Port || old[i].Name != new[i].Name ||
 			old[i].Subdomain != new[i].Subdomain || old[i].TTL != new[i].TTL ||
-			old[i].Host != new[i].Host || old[i].IdleTTL != new[i].IdleTTL {
+			old[i].Host != new[i].Host || old[i].IdleTTL != new[i].IdleTTL ||
+			old[i].Mode != new[i].Mode {
 			return true
 		}
 	}
@@ -480,7 +485,7 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 	for key, s := range desired {
 		prev, running := d.specs[key]
 		if running && prev.Port == s.Port && prev.Subdomain == s.Subdomain &&
-			prev.Host == s.Host && prev.TTL == s.TTL {
+			prev.Host == s.Host && prev.TTL == s.TTL && prev.Mode == s.Mode {
 			continue // no change
 		}
 
@@ -506,7 +511,17 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 			ttl = d.cfg.DefaultTTL
 		}
 
-		log.Printf("[daemon] opening: %s (port %d)", name, s.Port)
+		mode, err := client.NormalizeMode(s.Mode)
+		if err != nil {
+			log.Printf("[daemon] skipping %s: %v", name, err)
+			continue
+		}
+
+		if client.IsTLSPassthrough(mode) {
+			log.Printf("[daemon] opening: %s (port %d, tls-passthrough)", name, s.Port)
+		} else {
+			log.Printf("[daemon] opening: %s (port %d)", name, s.Port)
+		}
 
 		mgr := tunnel.NewManager(d.cfg, d.client)
 
@@ -541,6 +556,7 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 			Source:   "daemon",
 			AuthUser: authUser,
 			AuthPass: authPass,
+			Mode:     mode, // re-sent by the manager on every re-registration
 		}
 
 		at, err := mgr.OpenTunnel(spec)
@@ -549,7 +565,11 @@ func (d *Daemon) reconcile(specs []config.TunnelSpec) {
 			continue
 		}
 
-		log.Printf("[daemon] ✓ %s → %s", name, at.PublicURL)
+		if client.IsTLSPassthrough(mode) {
+			log.Printf("[daemon] ✓ %s → %s (tls-passthrough: end-to-end TLS, certificate is served by the local service)", name, at.PublicURL)
+		} else {
+			log.Printf("[daemon] ✓ %s → %s", name, at.PublicURL)
+		}
 
 		// Report to dashboard if in dashboard mode
 		d.reportTunnelConnected(s.Name, s.Port, at.TunnelID, at.PublicURL)

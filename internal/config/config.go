@@ -28,6 +28,7 @@ type TunnelSpec struct {
 	TTL       string `json:"ttl,omitempty"`
 	IdleTTL   bool   `json:"idle_ttl,omitempty"`
 	Auth      string `json:"auth,omitempty"` // basic auth "user:pass" (optional)
+	Mode      string `json:"mode,omitempty"` // "" / "relay" (default) or "tls-passthrough"
 }
 
 // Config holds client configuration.
@@ -141,6 +142,11 @@ server = "https://tunnel.nullbore.com"
 # host = "localhost"
 #
 # [[tunnels]]
+# port = 8443
+# name = "secure"
+# mode = "tls-passthrough"   # end-to-end TLS; local service must serve TLS (paid plans)
+#
+# [[tunnels]]
 # port = 8080
 # name = "web"
 # ttl = "2h"
@@ -225,6 +231,8 @@ func LoadFrom(path string) (*Config, error) {
 				currentTunnel.IdleTTL = val == "true" || val == "1"
 			case "auth":
 				currentTunnel.Auth = val
+			case "mode":
+				currentTunnel.Mode = val
 			default:
 				parsed = false
 			}

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -140,40 +142,65 @@ func requireKey(cfg *config.Config) error {
 	return nil
 }
 
-func cmdOpen(cfg *config.Config, args []string) error {
-	if err := requireKey(cfg); err != nil {
-		return err
+// tlsPassthroughHelp is the --tls-passthrough flag help text (shared with docgen).
+const tlsPassthroughHelp = "End-to-end TLS passthrough: the relay forwards raw encrypted bytes and never decrypts them. " +
+	"Your local service must serve TLS itself (visitors see its certificate). " +
+	"The relay cannot inspect requests or add basic auth (--auth). Paid plans only"
+
+// validateOpenModeFlags rejects flag combinations that cannot work with the
+// requested tunnel mode.
+func validateOpenModeFlags(tlsPassthrough bool, auth string) error {
+	if tlsPassthrough && auth != "" {
+		return fmt.Errorf("--tls-passthrough cannot be combined with --auth: the relay never decrypts passthrough traffic, so it cannot enforce basic auth (add auth in your local service instead)")
 	}
-	fs := flag.NewFlagSet("open", flag.ExitOnError)
+	return nil
+}
+
+// reorderArgs moves positional args after flags so flag.Parse sees every
+// flag (e.g. "8000 --ttl 30s" → "--ttl 30s 8000"). Value flags consume the
+// following arg; boolean flags (e.g. --tls-passthrough) do not.
+func reorderArgs(fs *flag.FlagSet, args []string) []string {
+	var reordered, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			positional = append(positional, a)
+			continue
+		}
+		reordered = append(reordered, a)
+		if strings.Contains(a, "=") {
+			continue
+		}
+		if f := fs.Lookup(strings.TrimLeft(a, "-")); f != nil {
+			if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+				continue
+			}
+		}
+		if i+1 < len(args) {
+			i++
+			reordered = append(reordered, args[i])
+		}
+	}
+	return append(reordered, positional...)
+}
+
+// parseOpenArgs parses `nullbore open` arguments into tunnel specs.
+func parseOpenArgs(cfg *config.Config, args []string) ([]tunnel.TunnelSpec, error) {
+	fs := flag.NewFlagSet("open", flag.ContinueOnError)
 
 	// Support both old-style --port N and new repeatable -p PORT:NAME
 	singlePort := fs.Int("port", 0, "Local port to expose (single tunnel)")
 	name := fs.String("name", "", "Tunnel name (single tunnel mode)")
 	ttl := fs.String("ttl", cfg.DefaultTTL, "Time-to-live (e.g. 30m, 2h)")
 	authFlag := fs.String("auth", "", "Basic auth for tunnel access (user:pass)")
+	tlsPassthrough := fs.Bool("tls-passthrough", false, tlsPassthroughHelp)
 
 	var ports portList
 	fs.Var(&ports, "p", "Port to expose, repeatable. Format: PORT or PORT:NAME (e.g. -p 3000:api -p 8080:web)")
 
-	// Reorder args: move positional port numbers before flags so flag.Parse sees all flags.
-	// e.g. "8000 --ttl 30s" → "--ttl 30s 8000"
-	var reordered []string
-	var positional []string
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], "-") {
-			reordered = append(reordered, args[i])
-			// If it's not a bool-style flag, grab the next arg as its value
-			if i+1 < len(args) && !strings.Contains(args[i], "=") {
-				i++
-				reordered = append(reordered, args[i])
-			}
-		} else {
-			positional = append(positional, args[i])
-		}
+	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
+		return nil, err
 	}
-	reordered = append(reordered, positional...)
-
-	fs.Parse(reordered)
 
 	// Also accept positional args as ports (e.g. `nullbore open 3000 8080`)
 	for _, arg := range fs.Args() {
@@ -189,16 +216,19 @@ func cmdOpen(cfg *config.Config, args []string) error {
 	}
 
 	if len(ports) == 0 {
-		return fmt.Errorf("at least one port is required\n\nUsage:\n  nullbore open --port 3000\n  nullbore open -p 3000:api -p 8080:web\n  nullbore open 3000 8080")
+		return nil, fmt.Errorf("at least one port is required\n\nUsage:\n  nullbore open --port 3000\n  nullbore open -p 3000:api -p 8080:web\n  nullbore open 3000 8080")
 	}
 
-	// Set TTL on all specs
-	// Set TTL and optional auth on all specs
+	if err := validateOpenModeFlags(*tlsPassthrough, *authFlag); err != nil {
+		return nil, err
+	}
+
+	// Set TTL, optional auth, and mode on all specs
 	var authUser, authPass string
 	if *authFlag != "" {
 		parts := strings.SplitN(*authFlag, ":", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return fmt.Errorf("--auth must be in user:pass format")
+			return nil, fmt.Errorf("--auth must be in user:pass format")
 		}
 		authUser, authPass = parts[0], parts[1]
 	}
@@ -208,6 +238,35 @@ func cmdOpen(cfg *config.Config, args []string) error {
 			ports[i].AuthUser = authUser
 			ports[i].AuthPass = authPass
 		}
+		if *tlsPassthrough {
+			ports[i].Mode = client.ModeTLSPassthrough
+		}
+	}
+	return ports, nil
+}
+
+// passthroughURL returns the URL to show for a tunnel. Passthrough tunnels
+// carry TLS end-to-end, so they are always reached over https.
+func passthroughURL(publicURL, mode string) string {
+	if client.IsTLSPassthrough(mode) && strings.HasPrefix(publicURL, "http://") {
+		return "https://" + strings.TrimPrefix(publicURL, "http://")
+	}
+	return publicURL
+}
+
+// passthroughNote explains who serves the certificate on a passthrough tunnel.
+const passthroughNote = "tls-passthrough: end-to-end encrypted — the certificate visitors see is your local service's own"
+
+func cmdOpen(cfg *config.Config, args []string) error {
+	if err := requireKey(cfg); err != nil {
+		return err
+	}
+	ports, err := parseOpenArgs(cfg, args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
 	}
 
 	c := client.New(cfg)
@@ -224,12 +283,12 @@ func cmdOpen(cfg *config.Config, args []string) error {
 			return err
 		}
 
-		label := at.Slug
-		if spec.Name != "" {
-			label = spec.Name
+		if client.IsTLSPassthrough(spec.Mode) {
+			fmt.Printf("  ✓ %s → localhost:%d (tls-passthrough)\n", passthroughURL(at.PublicURL, spec.Mode), spec.Port)
+			fmt.Printf("      %s\n", passthroughNote)
+		} else {
+			fmt.Printf("  ✓ %s → localhost:%d\n", at.PublicURL, spec.Port)
 		}
-		fmt.Printf("  ✓ %s → localhost:%d\n", at.PublicURL, spec.Port)
-		_ = label
 	}
 
 	fmt.Printf("\n  %d tunnel(s) active — press Ctrl+C to close\n\n", len(ports))
@@ -271,18 +330,45 @@ func cmdList(cfg *config.Config) error {
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	writeTunnelList(os.Stdout, tunnels)
+	return nil
+}
+
+// modeLabel returns the display label for a tunnel mode.
+func modeLabel(mode string) string {
+	if mode == "" {
+		return client.ModeRelay
+	}
+	return mode
+}
+
+// writeTunnelList prints the `nullbore list` table. Passthrough tunnels show
+// their https URL and a note that the certificate is the local service's.
+func writeTunnelList(out io.Writer, tunnels []client.Tunnel) {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tSLUG\tPORT\tMODE\tEXPIRES")
+	var passthrough []client.Tunnel
 	for _, t := range tunnels {
 		id := t.ID
 		if len(id) > 8 {
 			id = id[:8]
 		}
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n",
-			id, t.Slug, t.LocalPort, t.Mode, t.ExpiresAt)
+			id, t.Slug, t.LocalPort, modeLabel(t.Mode), t.ExpiresAt)
+		if client.IsTLSPassthrough(t.Mode) {
+			passthrough = append(passthrough, t)
+		}
 	}
 	w.Flush()
-	return nil
+
+	if len(passthrough) > 0 {
+		fmt.Fprintf(out, "\n%s\n", passthroughNote)
+		for _, t := range passthrough {
+			if t.PublicURL != "" {
+				fmt.Fprintf(out, "  %s  %s\n", t.Slug, passthroughURL(t.PublicURL, t.Mode))
+			}
+		}
+	}
 }
 
 func cmdClose(cfg *config.Config, args []string) error {
@@ -435,7 +521,7 @@ func cmdDaemon(cfg *config.Config, args []string) error {
 		return detachDaemon(pidPath, logPath)
 	}
 
-	// Static tunnel mode: NULLBORE_TUNNELS=host:port:slug,host:port:slug,...
+	// Static tunnel mode: NULLBORE_TUNNELS=host:port:slug[+tls-passthrough],...
 	if tunnelEnv := os.Getenv("NULLBORE_TUNNELS"); tunnelEnv != "" {
 		return runStaticTunnels(cfg, tunnelEnv)
 	}
@@ -462,26 +548,46 @@ func cmdDaemon(cfg *config.Config, args []string) error {
 	return d.Run()
 }
 
-// runStaticTunnels opens tunnels from NULLBORE_TUNNELS env var.
-// Format: host:port:slug,host:port:slug,...
+// parseStaticTunnels parses the NULLBORE_TUNNELS env var.
+//
+// Format: comma-separated entries, each one of
+//
+//	port | port:slug | host:port | host:port:slug
+//
+// optionally followed by "+option" suffixes. The only option today is
+// "+tls-passthrough" (end-to-end TLS; "+relay" is accepted as the explicit
+// default). '+' never appears in hostnames, ports, or slugs, so entries
+// without a suffix parse exactly as before.
+//
 // Examples: gramps:5000:gramps-web,openclaw:8080:my-claw
-//           localhost:3000:api (equivalent to just port 3000)
-func runStaticTunnels(cfg *config.Config, spec string) error {
-	if cfg.Token() == "" {
-		return fmt.Errorf("API key required. Set NULLBORE_API_KEY")
-	}
-
-	apiClient := client.New(cfg)
-	mgr := tunnel.NewManager(cfg, apiClient)
-
-	entries := strings.Split(spec, ",")
-	for _, entry := range entries {
+//
+//	localhost:3000:api (equivalent to just port 3000)
+//	caddy:443:secure+tls-passthrough
+func parseStaticTunnels(spec, defaultTTL string) ([]tunnel.TunnelSpec, error) {
+	var specs []tunnel.TunnelSpec
+	for _, entry := range strings.Split(spec, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
 
-		parts := strings.SplitN(entry, ":", 3)
+		// Split off "+option" suffixes.
+		fields := strings.Split(entry, "+")
+		addr := fields[0]
+		var mode string
+		for _, opt := range fields[1:] {
+			opt = strings.TrimSpace(opt)
+			switch opt {
+			case client.ModeTLSPassthrough:
+				mode = client.ModeTLSPassthrough
+			case client.ModeRelay:
+				mode = ""
+			default:
+				return nil, fmt.Errorf("invalid tunnel spec %q: unknown option %q (valid: +%s)", entry, opt, client.ModeTLSPassthrough)
+			}
+		}
+
+		parts := strings.SplitN(addr, ":", 3)
 		var host, slug string
 		var port int
 
@@ -490,7 +596,7 @@ func runStaticTunnels(cfg *config.Config, spec string) error {
 			// Just a port: "3000"
 			p, err := strconv.Atoi(parts[0])
 			if err != nil {
-				return fmt.Errorf("invalid tunnel spec %q: %w", entry, err)
+				return nil, fmt.Errorf("invalid tunnel spec %q: %w", entry, err)
 			}
 			port = p
 		case 2:
@@ -501,7 +607,7 @@ func runStaticTunnels(cfg *config.Config, spec string) error {
 				host = parts[0]
 				p2, err := strconv.Atoi(parts[1])
 				if err != nil {
-					return fmt.Errorf("invalid tunnel spec %q: expected host:port", entry)
+					return nil, fmt.Errorf("invalid tunnel spec %q: expected host:port", entry)
 				}
 				port = p2
 			} else {
@@ -514,31 +620,56 @@ func runStaticTunnels(cfg *config.Config, spec string) error {
 			host = parts[0]
 			p, err := strconv.Atoi(parts[1])
 			if err != nil {
-				return fmt.Errorf("invalid tunnel spec %q: port must be a number", entry)
+				return nil, fmt.Errorf("invalid tunnel spec %q: port must be a number", entry)
 			}
 			port = p
 			slug = parts[2]
 		default:
-			return fmt.Errorf("invalid tunnel spec %q", entry)
+			return nil, fmt.Errorf("invalid tunnel spec %q", entry)
 		}
 
-		s := tunnel.TunnelSpec{
+		specs = append(specs, tunnel.TunnelSpec{
 			Port: port,
 			Host: host,
 			Name: slug,
-			TTL:  cfg.DefaultTTL,
-		}
+			TTL:  defaultTTL,
+			Mode: mode,
+		})
+	}
+	return specs, nil
+}
 
+// runStaticTunnels opens tunnels from NULLBORE_TUNNELS env var (see
+// parseStaticTunnels for the format). Each tunnel's mode is kept in its spec,
+// so the manager re-sends it on every reconnect/re-registration.
+func runStaticTunnels(cfg *config.Config, spec string) error {
+	if cfg.Token() == "" {
+		return fmt.Errorf("API key required. Set NULLBORE_API_KEY")
+	}
+
+	specs, err := parseStaticTunnels(spec, cfg.DefaultTTL)
+	if err != nil {
+		return err
+	}
+
+	apiClient := client.New(cfg)
+	mgr := tunnel.NewManager(cfg, apiClient)
+
+	for _, s := range specs {
 		at, err := mgr.OpenTunnel(s)
 		if err != nil {
-			return fmt.Errorf("opening tunnel %q: %w", entry, err)
+			return fmt.Errorf("opening tunnel on port %d: %w", s.Port, err)
 		}
 
 		target := "localhost"
-		if host != "" {
-			target = host
+		if s.Host != "" {
+			target = s.Host
 		}
-		log.Printf("tunnel open: %s → %s:%d", at.PublicURL, target, port)
+		if client.IsTLSPassthrough(s.Mode) {
+			log.Printf("tunnel open: %s → %s:%d (%s)", passthroughURL(at.PublicURL, s.Mode), target, s.Port, passthroughNote)
+		} else {
+			log.Printf("tunnel open: %s → %s:%d", at.PublicURL, target, s.Port)
+		}
 	}
 
 	// Graceful shutdown
@@ -681,6 +812,7 @@ Usage:
   nullbore open --port <port> [--name <name>] [--ttl <duration>]
   nullbore open -p <port>[:<name>] [-p <port>[:<name>] ...]
   nullbore open <port> [<port> ...]
+  nullbore open --port <port> --tls-passthrough   # end-to-end TLS (paid plans)
   nullbore daemon                             # persistent mode from config.toml
   nullbore device                             # show device info
   nullbore device takeover                    # rebind API key to this device
@@ -696,6 +828,13 @@ Examples:
   nullbore open --port 3000                  # single tunnel
   nullbore open -p 3000:api -p 8080:web      # multiple named tunnels
   nullbore open 3000 8080 5432               # multiple tunnels (positional)
+  nullbore open --port 8443 --tls-passthrough  # end-to-end TLS; local service must serve TLS
+
+TLS passthrough (--tls-passthrough):
+  The relay forwards raw TLS bytes and never decrypts them — traffic is
+  encrypted end-to-end. Your local service must serve TLS itself, and visitors
+  see its certificate. The relay cannot inspect requests or add basic auth, so
+  --auth is not allowed. Paid plans only.
 
 Configuration:
   ~/.config/nullbore/config.toml  (or $XDG_CONFIG_HOME/nullbore/config.toml)
@@ -709,6 +848,9 @@ Environment:
   NULLBORE_API_KEY            Override API key
   NULLBORE_DASHBOARD          Override dashboard URL
   NULLBORE_TLS_SKIP_VERIFY    Skip TLS verification (1/true)
+  NULLBORE_TUNNELS            Static tunnels for 'nullbore daemon' (Docker):
+                              host:port:slug,...  append +tls-passthrough to an
+                              entry for end-to-end TLS (e.g. caddy:443:web+tls-passthrough)
 
 Daemon mode:
   Reads tunnel definitions from config.toml and keeps them open persistently.
@@ -729,6 +871,11 @@ Daemon mode:
     port = 5432
     name = "postgres"
     subdomain = "db"
+
+    [[tunnels]]
+    port = 8443
+    name = "secure"
+    mode = "tls-passthrough"   # end-to-end TLS (paid plans)
 
 Tip: Run "nullbore daemon" to start persistent tunnels from your config.
 `)

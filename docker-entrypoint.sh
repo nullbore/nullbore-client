@@ -10,6 +10,8 @@ set -e
 #   2. Static tunnels: set NULLBORE_API_KEY + NULLBORE_TUNNELS
 #      → opens fixed tunnels: "host:port:slug,host:port:slug,..."
 #      → e.g. NULLBORE_TUNNELS=gramps:5000:gramps-web,openclaw:8080:claw
+#      → append +tls-passthrough to an entry for end-to-end TLS
+#        (service must serve TLS; paid plans): caddy:443:secure+tls-passthrough
 #
 #   3. Direct command: pass any nullbore args
 #      → e.g. docker run nullbore/tunnel open gramps:5000 --name gramps

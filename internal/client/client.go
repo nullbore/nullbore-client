@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nullbore/nullbore-client/internal/config"
@@ -39,6 +41,29 @@ func apiCompatWarning(serverAPI string) string {
 	}
 	return fmt.Sprintf("This NullBore server uses API v%s, but your client speaks v%s. "+
 		"Some features may not work — update with: nullbore update", serverAPI, SupportedAPIVersion)
+}
+
+// APIError is a non-2xx response from the server. Its Error() text keeps the
+// historical "server error (CODE): BODY" format.
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("server error (%d): %s", e.StatusCode, e.Body)
+}
+
+// Message returns the server's human-readable error: the "error" field of a
+// JSON body if present, otherwise the trimmed raw body.
+func (e *APIError) Message() string {
+	var v struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal([]byte(e.Body), &v) == nil && v.Error != "" {
+		return v.Error
+	}
+	return strings.TrimSpace(e.Body)
 }
 
 // Client communicates with the NullBore server REST API.
@@ -83,6 +108,81 @@ func New(cfg *config.Config) *Client {
 	}
 }
 
+// Tunnel modes accepted by POST /v1/tunnels (the "mode" field).
+const (
+	// ModeRelay is the default: the relay terminates TLS and proxies HTTP.
+	// Never sent explicitly — an omitted mode means relay.
+	ModeRelay = "relay"
+	// ModeTLSPassthrough makes the relay forward raw TLS bytes end-to-end.
+	// The local service must speak TLS itself; the relay cannot inspect
+	// traffic or add basic auth. Paid plans only.
+	ModeTLSPassthrough = "tls-passthrough"
+)
+
+// NormalizeMode validates a user-supplied tunnel mode and returns the value to
+// send to the server. "" and "relay" both normalize to "" (omit the field, so
+// requests are byte-identical to pre-mode clients).
+func NormalizeMode(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ModeRelay:
+		return "", nil
+	case ModeTLSPassthrough:
+		return ModeTLSPassthrough, nil
+	default:
+		return "", fmt.Errorf("unknown tunnel mode %q (valid: %s, %s)", mode, ModeRelay, ModeTLSPassthrough)
+	}
+}
+
+// IsTLSPassthrough reports whether a tunnel mode is end-to-end TLS passthrough.
+func IsTLSPassthrough(mode string) bool { return mode == ModeTLSPassthrough }
+
+// TunnelOptions holds every option accepted when creating a tunnel.
+type TunnelOptions struct {
+	Port     int
+	Name     string
+	TTL      string
+	Source   string // "cli" or "daemon"
+	AuthUser string
+	AuthPass string
+	Mode     string // "" (relay) or ModeTLSPassthrough
+}
+
+// Validate rejects option combinations the server would refuse anyway, so the
+// user gets a clear local error instead of a round trip.
+func (o TunnelOptions) Validate() error {
+	if _, err := NormalizeMode(o.Mode); err != nil {
+		return err
+	}
+	if IsTLSPassthrough(o.Mode) && (o.AuthUser != "" || o.AuthPass != "") {
+		return fmt.Errorf("basic auth cannot be combined with TLS passthrough: the relay never sees decrypted traffic, so it cannot enforce auth (add auth in your local service instead)")
+	}
+	return nil
+}
+
+// createTunnelBody builds the JSON body for POST /v1/tunnels. Optional fields
+// (name, ttl, auth, mode) are included only when set.
+func createTunnelBody(o TunnelOptions, deviceName string) map[string]interface{} {
+	body := map[string]interface{}{
+		"local_port":  o.Port,
+		"device_name": deviceName,
+		"source":      o.Source,
+	}
+	if o.Name != "" {
+		body["name"] = o.Name
+	}
+	if o.TTL != "" {
+		body["ttl"] = o.TTL
+	}
+	if o.AuthUser != "" && o.AuthPass != "" {
+		body["auth_user"] = o.AuthUser
+		body["auth_pass"] = o.AuthPass
+	}
+	if o.Mode != "" && o.Mode != ModeRelay {
+		body["mode"] = o.Mode
+	}
+	return body
+}
+
 // CreateTunnel registers a new tunnel with the server.
 func (c *Client) CreateTunnel(port int, name, ttl string) (*Tunnel, error) {
 	return c.CreateTunnelFull(port, name, ttl, "cli", "", "")
@@ -95,32 +195,85 @@ func (c *Client) CreateTunnelWithSource(port int, name, ttl, source string) (*Tu
 
 // CreateTunnelFull registers a tunnel with all options including basic auth.
 func (c *Client) CreateTunnelFull(port int, name, ttl, source, authUser, authPass string) (*Tunnel, error) {
+	return c.CreateTunnelWithOptions(TunnelOptions{
+		Port: port, Name: name, TTL: ttl, Source: source,
+		AuthUser: authUser, AuthPass: authPass,
+	})
+}
+
+// CreateTunnelWithOptions registers a tunnel with the full option set,
+// including the tunnel mode.
+func (c *Client) CreateTunnelWithOptions(o TunnelOptions) (*Tunnel, error) {
+	mode, err := NormalizeMode(o.Mode)
+	if err != nil {
+		return nil, err
+	}
+	o.Mode = mode
+	if err := o.Validate(); err != nil {
+		return nil, err
+	}
+
 	deviceName := c.cfg.DeviceName
 	if deviceName == "" {
 		deviceName, _ = os.Hostname()
 	}
-	body := map[string]interface{}{
-		"local_port":  port,
-		"device_name": deviceName,
-		"source":      source,
-	}
-	if name != "" {
-		body["name"] = name
-	}
-	if ttl != "" {
-		body["ttl"] = ttl
-	}
-	if authUser != "" && authPass != "" {
-		body["auth_user"] = authUser
-		body["auth_pass"] = authPass
-	}
 
 	var t Tunnel
-	if err := c.post("/v1/tunnels", body, &t); err != nil {
-		return nil, err
+	if err := c.post("/v1/tunnels", createTunnelBody(o, deviceName), &t); err != nil {
+		return nil, explainModeError(err, o.Mode)
+	}
+
+	// A server that predates TLS passthrough ignores the unknown field and
+	// creates a plain relay tunnel. That tunnel would silently break (the relay
+	// would speak HTTP to a TLS-only service), so refuse it and clean up.
+	if IsTLSPassthrough(o.Mode) && t.Mode != ModeTLSPassthrough {
+		if t.ID != "" {
+			_ = c.CloseTunnel(t.ID)
+		}
+		got := t.Mode
+		if got == "" {
+			got = "unspecified"
+		}
+		return nil, fmt.Errorf("server does not support TLS passthrough (it created a %q tunnel instead; closed it) — the server needs upgrading", got)
 	}
 	return &t, nil
 }
+
+// explainModeError adds context to server rejections of a TLS passthrough
+// request. The server answers 403 for plans without passthrough and 400 for
+// invalid combinations (e.g. basic auth).
+func explainModeError(err error, mode string) error {
+	if !IsTLSPassthrough(mode) {
+		return err
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+	switch apiErr.StatusCode {
+	case http.StatusForbidden:
+		return &modeError{
+			msg: fmt.Sprintf("TLS passthrough is not available on your plan — it requires a paid plan (server said: %s)", apiErr.Message()),
+			err: err,
+		}
+	case http.StatusBadRequest:
+		return &modeError{
+			msg: fmt.Sprintf("server rejected the TLS passthrough tunnel (server said: %s)", apiErr.Message()),
+			err: err,
+		}
+	}
+	return err
+}
+
+// modeError replaces the raw server error text with a clearer message while
+// keeping the underlying *APIError reachable via errors.As.
+type modeError struct {
+	msg string
+	err error
+}
+
+func (e *modeError) Error() string { return e.msg }
+func (e *modeError) Unwrap() error { return e.err }
 
 // ListTunnels returns all active tunnels.
 func (c *Client) ListTunnels() ([]Tunnel, error) {
@@ -241,7 +394,7 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	}
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(respBody))
+		return &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	if out != nil {
