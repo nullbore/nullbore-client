@@ -78,6 +78,8 @@ func Run(args []string) error {
 		return cmdUpdate(args[1:])
 	case "device":
 		return cmdDevice(cfg, args[1:])
+	case "acme":
+		return cmdACME(cfg, args[1:])
 	case "version":
 		fmt.Printf("nullbore %s\n", version)
 		checkUpdateQuiet()
@@ -823,6 +825,7 @@ Usage:
   nullbore close <tunnel-id-or-name>
   nullbore status
   nullbore version
+  nullbore acme present|cleanup <fqdn> <value>  # ACME DNS-01 hook (see 'nullbore acme help')
 
 Examples:
   nullbore open --port 3000                  # single tunnel
@@ -835,6 +838,13 @@ TLS passthrough (--tls-passthrough):
   encrypted end-to-end. Your local service must serve TLS itself, and visitors
   see its certificate. The relay cannot inspect requests or add basic auth, so
   --auth is not allowed. Paid plans only.
+
+Trusted certificates (nullbore acme):
+  An ACME DNS-01 hook for <tunnel>.<account>.e2e.nullbore.com (or the wildcard
+  *.<account>.e2e.nullbore.com). NullBore only publishes the challenge TXT
+  record; your private key never leaves your machine. Works with lego's exec
+  provider via a wrapper script containing: exec nullbore acme "$@"
+  Run 'nullbore acme help' for details.
 
 Configuration:
   ~/.config/nullbore/config.toml  (or $XDG_CONFIG_HOME/nullbore/config.toml)

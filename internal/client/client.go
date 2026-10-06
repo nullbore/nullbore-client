@@ -333,11 +333,16 @@ func (c *Client) get(path string, out interface{}) error {
 }
 
 func (c *Client) post(path string, body interface{}, out interface{}) error {
+	return c.send("POST", path, body, out)
+}
+
+// send issues a request with a JSON body (any method, e.g. DELETE with a body).
+func (c *Client) send(method, path string, body interface{}, out interface{}) error {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("POST", c.cfg.ServerURL()+path, bytes.NewReader(data))
+	req, err := http.NewRequest(method, c.cfg.ServerURL()+path, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}

@@ -116,6 +116,39 @@ func allCommands() []cmdDoc {
 			RequiresKey: true,
 		},
 		{
+			Name:    "acme",
+			Summary: "ACME DNS-01 hook for publicly trusted end-to-end tunnel certificates",
+			Usage: []string{
+				"nullbore acme present [--no-wait] [--wait-timeout 120s] <fqdn> <value>",
+				"nullbore acme cleanup <fqdn> <value>",
+			},
+			Args: "`<fqdn>` is the challenge name (e.g. `_acme-challenge.ACCOUNT.e2e.nullbore.com`; a trailing dot is accepted) " +
+				"and `<value>` the TXT value supplied by your ACME client.",
+			Description: "End-to-end (`--tls-passthrough`) tunnels are served at `<tunnel>.<account>.e2e.nullbore.com`, " +
+				"and your local service presents its own certificate. `nullbore acme` lets any ACME client obtain a " +
+				"publicly trusted certificate for that name, or the wildcard `*.<account>.e2e.nullbore.com`, " +
+				"using the DNS-01 challenge: `present` asks the NullBore server to publish the `_acme-challenge` TXT record, " +
+				"`cleanup` removes it. Only the challenge value is sent to NullBore; **the private key is generated and stays on your machine.** " +
+				"Paid plans only.\n\n" +
+				"By default `present` then waits (up to `--wait-timeout`) until 1.1.1.1 and 8.8.8.8 serve the record, " +
+				"so ACME clients that don't check propagation still work. `cleanup` succeeds if the record is already gone.\n\n" +
+				"The argument order matches lego's exec provider, which runs `$EXEC_PATH present <fqdn> <value>` and " +
+				"`$EXEC_PATH cleanup <fqdn> <value>`. Point `EXEC_PATH` at a two-line wrapper script:\n\n" +
+				"    #!/bin/sh\n" +
+				"    exec nullbore acme \"$@\"\n\n" +
+				"Then serve the issued certificate and key (lego writes them to `./.lego/certificates/`) from your local TLS server.",
+			CustomFlags: "  --no-wait               Return as soon as the server accepts the record\n" +
+				"  --wait                  Wait for 1.1.1.1 and 8.8.8.8 to serve the record (default)\n" +
+				"  --wait-timeout <dur>    Stop waiting after this long; the command still succeeds (default: 120s)",
+			Examples: []string{
+				"printf '#!/bin/sh\\nexec nullbore acme \"$@\"\\n' > ~/bin/nullbore-acme-hook && chmod +x ~/bin/nullbore-acme-hook",
+				"EXEC_PATH=~/bin/nullbore-acme-hook lego --dns exec --domains '*.ACCOUNT.e2e.nullbore.com' --email you@example.com run",
+				"nullbore acme present _acme-challenge.ACCOUNT.e2e.nullbore.com. TOKEN   # manual",
+				"nullbore acme cleanup _acme-challenge.ACCOUNT.e2e.nullbore.com. TOKEN",
+			},
+			RequiresKey: true,
+		},
+		{
 			Name:        "update",
 			Summary:     "Check for updates and self-update",
 			Usage:       []string{"nullbore update", "nullbore update --check"},

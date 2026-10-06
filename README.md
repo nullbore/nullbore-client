@@ -94,6 +94,53 @@ The mode is re-sent every time the daemon re-registers a tunnel after a
 reconnect. Dashboard-managed tunnels are always relay mode; the dashboard
 has no mode setting yet.
 
+## Trusted certificates for end-to-end tunnels
+
+End-to-end tunnels are served at `<tunnel>.<account>.e2e.nullbore.com`. Because
+the relay never decrypts them, the certificate visitors see is the one your
+local service serves, and browsers only trust it if it comes from a public
+CA. `nullbore acme` is an ACME DNS-01 hook that gets you one without your
+private key leaving your machine: your ACME client generates the key and CSR
+locally, and NullBore only publishes the `_acme-challenge` TXT record the CA
+checks. Paid plans only.
+
+```bash
+nullbore acme present <fqdn> <value>   # publish the TXT record, wait for public DNS
+nullbore acme cleanup <fqdn> <value>   # remove it (succeeds if already gone)
+```
+
+`present` waits (up to 120s, `--wait-timeout` to change) until 1.1.1.1 and
+8.8.8.8 serve the record; `--no-wait` skips that.
+
+### With lego
+
+lego's exec provider runs `$EXEC_PATH present <fqdn> <value>` and
+`$EXEC_PATH cleanup <fqdn> <value>`, which is exactly what `nullbore acme`
+takes. Create a two-line wrapper script and point `EXEC_PATH` at it:
+
+```bash
+cat > ~/bin/nullbore-acme-hook <<'EOF'
+#!/bin/sh
+exec nullbore acme "$@"
+EOF
+chmod +x ~/bin/nullbore-acme-hook
+
+# Wildcard cert covering every tunnel on your account (replace ACCOUNT)
+export NULLBORE_API_KEY="nbk_..."
+EXEC_PATH=~/bin/nullbore-acme-hook \
+  lego --dns exec --domains '*.ACCOUNT.e2e.nullbore.com' --email you@example.com run
+```
+
+lego writes the results to `./.lego/certificates/` (or `--path`): for the
+wildcard above, `_.ACCOUNT.e2e.nullbore.com.crt` (full chain) and
+`_.ACCOUNT.e2e.nullbore.com.key` (the private key, created locally). Renew
+with the same command, replacing `run` with `renew`.
+
+Then configure your local TLS server (Caddy, nginx, your app) to serve that
+certificate and key, and expose it with `nullbore open --port <port>
+--tls-passthrough`. The relay passes the TLS handshake straight through, so
+the certificate must be loaded by your local service; NullBore never sees it.
+
 ## License
 
 MIT
