@@ -34,7 +34,7 @@ The argument order matches lego's exec provider ($EXEC_PATH present|cleanup
   exec nullbore acme "$@"
 
   EXEC_PATH=/usr/local/bin/nullbore-acme-hook \
-    lego --dns exec --domains '*.ACCOUNT.e2e.nullbore.com' --email you@example.com run
+    lego run --accept-tos --path ~/.lego --dns exec --domains '*.ACCOUNT.e2e.nullbore.com'
 
 Flags (present):
   --no-wait            Return as soon as the server accepts the record

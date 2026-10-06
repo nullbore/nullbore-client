@@ -128,13 +128,16 @@ chmod +x ~/bin/nullbore-acme-hook
 # Wildcard cert covering every tunnel on your account (replace ACCOUNT)
 export NULLBORE_API_KEY="nbk_..."
 EXEC_PATH=~/bin/nullbore-acme-hook \
-  lego --dns exec --domains '*.ACCOUNT.e2e.nullbore.com' --email you@example.com run
+  lego run --accept-tos --path ~/.lego --dns exec --domains '*.ACCOUNT.e2e.nullbore.com'
 ```
 
-lego writes the results to `./.lego/certificates/` (or `--path`): for the
-wildcard above, `_.ACCOUNT.e2e.nullbore.com.crt` (full chain) and
-`_.ACCOUNT.e2e.nullbore.com.key` (the private key, created locally). Renew
-with the same command, replacing `run` with `renew`.
+(lego 5 syntax — options after `run`. On lego 4: `lego --path ~/.lego --dns exec --domains '...' run`.)
+
+lego writes the results to `~/.lego/certificates/`: for the wildcard above,
+`_.ACCOUNT.e2e.nullbore.com.crt` (certificate) and
+`_.ACCOUNT.e2e.nullbore.com.key` (the private key, created locally). Renew by
+re-running the same `lego run` command (e.g. daily from cron; lego 5 only
+re-issues near expiry). On lego 4 use `renew` instead of `run`.
 
 Then configure your local TLS server (Caddy, nginx, your app) to serve that
 certificate and key, and expose it with `nullbore open --port <port>

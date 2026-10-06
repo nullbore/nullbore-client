@@ -136,13 +136,13 @@ func allCommands() []cmdDoc {
 				"`$EXEC_PATH cleanup <fqdn> <value>`. Point `EXEC_PATH` at a two-line wrapper script:\n\n" +
 				"    #!/bin/sh\n" +
 				"    exec nullbore acme \"$@\"\n\n" +
-				"Then serve the issued certificate and key (lego writes them to `./.lego/certificates/`) from your local TLS server.",
+				"Then serve the issued certificate and key (lego writes them to `~/.lego/certificates/` with `--path ~/.lego`) from your local TLS server.",
 			CustomFlags: "  --no-wait               Return as soon as the server accepts the record\n" +
 				"  --wait                  Wait for 1.1.1.1 and 8.8.8.8 to serve the record (default)\n" +
 				"  --wait-timeout <dur>    Stop waiting after this long; the command still succeeds (default: 120s)",
 			Examples: []string{
 				"printf '#!/bin/sh\\nexec nullbore acme \"$@\"\\n' > ~/bin/nullbore-acme-hook && chmod +x ~/bin/nullbore-acme-hook",
-				"EXEC_PATH=~/bin/nullbore-acme-hook lego --dns exec --domains '*.ACCOUNT.e2e.nullbore.com' --email you@example.com run",
+				"EXEC_PATH=~/bin/nullbore-acme-hook lego run --accept-tos --path ~/.lego --dns exec --domains '*.ACCOUNT.e2e.nullbore.com'",
 				"nullbore acme present _acme-challenge.ACCOUNT.e2e.nullbore.com. TOKEN   # manual",
 				"nullbore acme cleanup _acme-challenge.ACCOUNT.e2e.nullbore.com. TOKEN",
 			},
